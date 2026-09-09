@@ -35,6 +35,47 @@ cd ../app && node build-payload.mjs          # 组装 payload → D:\gbfp（junc
 npx tauri build --bundles nsis               # 产物: src-tauri/target/release/bundle/nsis/*-setup.exe
 ```
 
+## 构建 GBA Font Studio 桌面客户端
+
+### 前置依赖
+- **Node.js ≥ 20**（pi-web 构建 + payload 内捆绑 runtime 用同版本）
+- **Rust stable-msvc**（`rustup`，需 MSVC 工具链 + WebView2，Win10/11 默认自带）
+- **Git for Windows**（提供 bash；`build-payload.mjs` 捆绑其 `usr/bin` 进安装包，
+  可用 `GBA_GITBASH_SRC` 指向其他 Git 安装）
+- NSIS 由 tauri-cli 首次构建自动下载
+
+### 构建步骤（顺序固定，三步缺一不可）
+```bash
+# 1) 工作台生产构建（Turbopack；勿加 --webpack，会 OOM）
+cd pi-web && npm install && npx next build
+
+# 2) 组装 payload（约 900MB → D:\gbfp\payload，junction 挂回 app/src-tauri/payload）
+cd ../app && npm install
+node build-payload.mjs              # 完整构建
+# 增量: node build-payload.mjs --skip-next-build --skip-node-modules
+
+# 3) 打 NSIS 安装包
+npx tauri build --bundles nsis
+# 产物: app/src-tauri/target/release/bundle/nsis/GBA Font Studio_*-setup.exe（~200MB）
+```
+
+### 环境变量
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `GBA_PAYLOAD_DIR` | `D:\gbfp` | payload 实体目录（必须短路径，NSIS 限制 >260 字符源路径） |
+| `GBA_GITBASH_SRC` | `D:\Program Files\Git` | 捆绑 Git Bash 来源 |
+| `GBA_SERVE_PORT` / `GBA_WORKSPACE_DIR` 等 | — | 见 `app/README.md` |
+
+### 首次安装行为（新用户视角）
+安装后首启自动：创建 `data/workspace`（含两个 skill 全套 + 扩展 + 示例 ROM `pker.gba`）
+与 `data/agent`（含欢迎会话、捆绑 bash 的 shellPath）→ 拉起 pi-web(:30141) 与
+romctl serve(:8645) → 打开工作台窗口。全程无需配置 Node/Python/WSL。
+
+### 故障排查
+- 构建被打断后再打包：先删 `app/src-tauri/target/release/payload`、`_root_` 旧 staging
+- 安全软件拦截首启回环连接：客户端会自动杀树回退系统 node；仍失败请把安装目录加信任
+- NSIS **静默**安装（/S）可能被安全软件挂起：GUI 双击安装正常
+
 ## 测试
 
 ```bash

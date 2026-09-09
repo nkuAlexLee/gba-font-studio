@@ -18,6 +18,7 @@
 ## 常用命令（Windows + Git Bash）
 
 ```bash
+# 桌面客户端安装包（详细前置/环境变量/排查见根 README「构建 GBA Font Studio 桌面客户端」）
 # 无头调试（引擎在 gbajs2，工作区=仓库根）
 cd gbajs2 && node romctl.js serve            # :8645；/status /load /run /key /shot /memread /disasm /snap …
 
