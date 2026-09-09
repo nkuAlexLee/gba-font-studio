@@ -1,0 +1,11 @@
+﻿id,addr_gba,scene,context,max_bytes,max_chars,en,mt,final,status,notes
+00F40272,0x8F40272,ui-labels,,111,55,"Trainers have no EVs, but you can have them.[/n]Bag use in battles is disabled.[/n]The Set battle style is enforced.","训练家没有个体值,但你可以有.战斗[/n]中禁用背包.[/p]采用设定的对战方式.",,machine-translated,
+00F50AB8,0x8F50AB8,ui-labels,,21,10,Encounter Randomizer,遇敌随机,,machine-translated,
+00F5BB18,0x8F5BB18,ui-labels,,19,9,Ability Randomizer,特性随机,,machine-translated,
+00F66B78,0x8F66B78,ui-labels,,18,8,Innate Randomizer,先天随机,,machine-translated,
+00FA8FD0,0x8FA8FD0,ui-labels,,10,4,Inventory,背包,,machine-translated,
+00FA90C8,0x8FA90C8,ui-labels,,8,3,PokeNav,导航,,machine-translated,
+00FA9144,0x8FA9144,ui-labels,,5,2,Wiki,,,untranslated,
+00FA91C0,0x8FA91C0,ui-labels,,9,4,Settings,设置,,machine-translated,
+00FA923C,0x8FA923C,ui-labels,,5,2,Save,存,,machine-translated,
+00FA92B8,0x8FA92B8,ui-labels,,5,2,Exit,退,,machine-translated,

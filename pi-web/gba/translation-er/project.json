@@ -1,0 +1,47 @@
+{
+  "name": "translation-er",
+  "rom": "D:/vibecoding/gba-font-cracker-js/pi-web/gba/roms/宝可梦红龙传说_字库.gba",
+  "rom_size": "0x2000000",
+  "out_rom": "out/汉化输出.gba",
+  "charmap": "D:/vibecoding/gba-font-cracker-js/pi-web/gba/assets/charmap-base.txt",
+  "glossary": "D:/vibecoding/gba-font-cracker-js/pi-web/gba/translation-er/glossary.csv",
+  "append_addr": "0x9777E48",
+  "min_status": "machine-translated",
+  "created": "2026-09-03T10:55:26.192Z",
+  "_scenes": {
+    "main-text": {
+      "type": "add",
+      "from": "0x8000000",
+      "to": "0xA000000",
+      "strings": 1,
+      "addrs": "0x82C184B"
+    },
+    "ui-labels": {
+      "type": "add",
+      "addrs": "0xFA8FD0,0xFA90C8,0xFA9144,0xFA91C0,0xFA923C,0xFA92B8,0xF50AB8,0xF5BB18,0xF66B78,0xF40272",
+      "strings": 10
+    }
+  },
+  "min_pointer_source": "0x280000",
+  "keep_en": [
+    "S.S. Tidal",
+    "Elite Redux",
+    "PokéNav",
+    "Pokédex",
+    "Game Boy Advance",
+    "GameCube",
+    "START",
+    "Start",
+    "Select",
+    "SELECT",
+    "Inclement Emerald",
+    "https://dex.elite-redux.com",
+    "Poryscript",
+    "codes",
+    "Buffel",
+    "Darky"
+  ],
+  "encOpts": {
+    "escPrefix": "f7"
+  }
+}

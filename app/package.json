@@ -1,0 +1,14 @@
+{
+  "name": "gba-font-studio-app",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "tauri": "tauri",
+    "build:payload": "node build-payload.mjs",
+    "build": "npm run build:payload && tauri build",
+    "dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

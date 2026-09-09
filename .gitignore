@@ -1,0 +1,83 @@
+# ============ GBA Font Studio 仓库根 .gitignore ============
+# 仓库内容 = 三大源块：gbajs2（引擎/工具/技能/文档）、pi-web（工作台+规范 skill 源）、app（Tauri 客户端）
+# 不入仓：构建产物、依赖、用户数据、版权 ROM、外部参考目录
+
+# ---- 依赖与构建产物 ----
+node_modules/
+.next/
+out/
+dist/
+coverage/
+test-results/
+playwright-report/
+app/src-tauri/target/
+app/src-tauri/gen/
+# payload junction → D:\gbfp\payload（build-payload.mjs 的产物，勿入仓）
+app/src-tauri/payload/
+
+# ---- 模拟器/工具运行时产物 ----
+tmp/*
+!tmp/README.md
+work/*
+!work/README.md
+**/tmp/*
+!**/tmp/README.md
+**/work/*
+!**/work/README.md
+snap-*.bin
+serve.lock
+romctl.state.json
+hook-events.jsonl
+*.log
+nul
+
+# ---- 用户运行时数据（与 ROM 绑定，安装后动态生成）----
+data/
+projects/*/out/
+report/import-latest.json
+report/apply-report.json
+report/mt-polish-latest.json
+report/mt-retry.json
+report/translations*.json
+report/t-*.json
+report/translate-tasks.json
+report/translate-prompt.md
+report/fix-escapes.py
+report/*.tsv
+
+# ---- ROM 与存档（版权 + 大文件，不入仓）----
+*.gba
+*.gba.xz
+*.sav
+*.ss1
+*.zip
+*.7z
+
+# ---- 示例 ROM（用户批准入库；build-payload 以此为演示 ROM 源）----
+!pi-web/gba/roms/pker.gba
+!pi-web/gba/roms/pker.sav
+!gbajs2/roms/pker.gba
+
+# ---- 翻译工程运行时产物（strings/project.json 入仓，报告/产物不入）----
+translation-er/report/
+translation-er/tmp/
+**/translation-er/report/
+**/translation-er/tmp/
+**/translation-*/report/
+**/translation-*/tmp/
+
+# ---- 历史遗留误拷贝 ----
+app/gbfp/
+.git.disabled/
+
+# ---- 非必要大目录（外部参考/历史镜像）----
+git-master/
+backup/
+testfiles/
+tauri-dev/
+pi/
+
+# ---- 杂项 ----
+.DS_Store
+Thumbs.db
+*.bak

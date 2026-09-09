@@ -1,0 +1,22 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# ROM files (copyrighted): 忽略所有未压缩 ROM；仅显式保留两个调试用压缩包
+roms/*
+fontpatch/
+!roms/pker.gba.xz
+!roms/宝可梦红龙传说.gba.xz
+
+# Emulator temp output / screenshots
+tmp/
+backup/
+*.bmp
+*.sav
+
+# Logs
+*.log
+$RECYCLE.BIN/
+nul
+# 翻译流水线工作目录（可再生成）
+translation-*/

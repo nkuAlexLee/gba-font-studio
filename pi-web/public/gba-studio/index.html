@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GBA Font Studio — 字库/翻译可视化工作台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+	<div class="brand" title="GBA Font Studio"></div>
+	<button id="openRomBtn" title="浏览文件夹并加载 ROM">📂 打开 ROM</button>
+	<!-- 会话回放面板暂缓开放：保留 section 与逻辑，仅隐藏入口 -->
+	<nav id="tabs">
+		<button class="tab active" data-tab="screen">🎮 模拟器</button>
+		<button class="tab" data-tab="pipeline">📋 流水线</button>
+		<button class="tab" data-tab="charmap">🔡 码表/字模</button>
+		<button class="tab" data-tab="memdis">🔍 内存/反汇编</button>
+		<button class="tab" data-tab="review">✍️ 翻译审校</button>
+	</nav>
+	<div id="statusLine" class="status">连接中…</div>
+</header>
+
+<main>
+	<!-- ============ 面板 1: 模拟器 ============ -->
+	<section id="panel-screen" class="panel active">
+		<div class="screen-wrap">
+			<div class="gba-console">
+				<div class="gba-screen"><canvas id="screen" width="240" height="160"></canvas></div>
+			</div>
+			<div class="screen-side">
+				<div class="btnrow">
+					<button id="playBtn" class="primary">▶ 连续播放</button>
+					<button id="stepBtn">单帧 +1</button>
+					<button id="run60Btn">快进 60</button>
+					<button id="shotBtn">📸 截图</button>
+				</div>
+				<div class="btnrow pad">
+					<button data-key="UP">↑</button><button data-key="DOWN">↓</button>
+					<button data-key="LEFT">←</button><button data-key="RIGHT">→</button>
+					<button data-key="A">A</button><button data-key="B">B</button>
+					<button data-key="L">L</button><button data-key="R">R</button>
+					<button data-key="START">START</button><button data-key="SELECT">SELECT</button>
+				</div>
+				<div class="snap-box">
+					<div class="snap-head">
+						<b>快照存档</b>
+						<div class="snap-mode">
+							<button id="snapModeSave" class="primary">💾 存</button>
+							<button id="snapModeLoad">📂 读</button>
+							<button id="snapModeDel">🗑 删</button>
+						</div>
+					</div>
+					<div id="snapGrid" class="snap-grid"></div>
+				</div>
+				<div id="hookFeed" class="hookfeed"><div class="hd">hook 命中（实时）</div><div class="bd" id="hookFeedBody">（无）</div></div>
+			</div>
+		</div>
+	</section>
+
+	<!-- ============ 面板 2: 流水线 ============ -->
+	<section id="panel-pipeline" class="panel">
+		<div class="panel-head">
+			<h2>流水线看板</h2>
+			<span class="hint">数据源 work/pipeline.json（agent 通过 pipeline_stage 工具维护），2s 刷新 · 点阶段名跳到回放面板对应事件</span>
+		</div>
+		<div id="pipelineBoard" class="board"><div class="empty">加载中…（若无数据：让 agent 调 pipeline_stage 记录阶段）</div></div>
+	</section>
+
+	<!-- ============ 面板 3: 会话回放 ============ -->
+	<section id="panel-replay" class="panel">
+		<div class="replay-wrap">
+			<aside id="sessionList" class="session-list"><div class="empty">加载会话列表…</div></aside>
+			<div class="replay-main">
+				<div class="replay-toolbar">
+					<input id="replayFilter" type="search" placeholder="过滤：文本/工具名/事件类型（如 rom_screenshot 或 stage）">
+					<span id="replayMeta" class="hint"></span>
+				</div>
+				<div id="replayTimeline" class="timeline"><div class="empty">← 从左侧选择一个会话</div></div>
+			</div>
+		</div>
+	</section>
+
+	<!-- ============ 面板 4: 码表/字模 ============ -->
+	<section id="panel-charmap" class="panel">
+		<div class="charmap-head">
+			<div class="panel-head">
+				<h2>码表</h2>
+				<span id="charmapStats" class="hint"></span>
+			</div>
+			<input id="charmapFilter" type="search" placeholder="搜字符（如 草）或十六进制前缀（如 4e）">
+		</div>
+		<div class="charmap-wrap">
+			<div class="charmap-left">
+				<div id="charmapTable" class="charmap-table"><div class="empty">加载中…</div></div>
+			</div>
+			<div class="charmap-right">
+				<div class="glyph-box">
+					<h3>字模预览 <span class="hint">（11x11 点阵 + 游戏网格）</span></h3>
+					<div id="glyphTitle" class="hint">点击左侧码表行</div>
+					<canvas id="glyphCanvas" width="360" height="360" style="display:none"></canvas>
+					<canvas id="glyphGridCanvas" width="480" height="480" style="display:none"></canvas>
+				</div>
+				<div class="slot-box">
+					<h3>字库信息 <span id="slotStats" class="hint"></span></h3>
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- ============ 面板: 内存/反汇编（参照 memview.html 实现） ============ -->
+	<section id="panel-memdis" class="panel">
+		<div class="panel-head">
+			<h2>内存 / 反汇编</h2>
+			<span class="hint">实时只读；地址支持 0x 前缀</span>
+			<button id="memPcBtn" title="取当前 PC 填入并跟随">⌖ 取 PC</button>
+		</div>
+		<div class="memdis-cols">
+			<div class="mem-box">
+				<h3>内存 <span id="memChangeHint" class="hint"></span></h3>
+				<div class="btnrow">
+					<select id="memRegion"></select>
+					<input id="memAddr" value="0x03000000" style="min-width:170px" placeholder="0x03000000">
+					<button id="memReadBtn" class="primary">读取</button>
+					<button id="memPrevBtn" title="上一页">◀</button>
+					<button id="memNextBtn" title="下一页">▶</button>
+					<label style="display:inline-flex;align-items:center;gap:5px;color:var(--text-dim);font-size:12px"><input type="checkbox" id="memAutoChk"> 自动刷新</label>
+				</div>
+				<div id="memDump" class="memdump">（点击读取）</div>
+			</div>
+			<div class="mem-box">
+				<h3>反汇编 <span id="cpuMode" class="hint"></span><span id="pcLabel" class="hint" style="margin-left:10px"></span></h3>
+				<div class="btnrow">
+					<input id="disAddr" value="0x08000000" style="min-width:170px" placeholder="0x08000000">
+					<input id="disN" value="40" style="width:60px" title="指令条数（≤500）">
+					<select id="disMode">
+						<option value="">自动</option>
+						<option value="thumb">thumb</option>
+						<option value="arm">arm</option>
+					</select>
+					<button id="disBtn" class="primary">反汇编</button>
+					<label style="display:inline-flex;align-items:center;gap:5px;color:var(--text-dim);font-size:12px"><input type="checkbox" id="lockPcChk"> 跟随 PC</label>
+				</div>
+				<div id="disOut" class="memdump">（点击反汇编）</div>
+			</div>
+		</div>
+	</section>
+	<!-- ============ 面板 5: 翻译审校 ============ -->
+	<section id="panel-review" class="panel">
+		<div class="panel-head">
+			<h2>翻译审校 <span class="hint" id="reviewProject"></span></h2>
+			<div class="btnrow">
+				<select id="reviewProjectSel" hidden title="翻译工程（与 ROM 绑定）"></select>
+				<select id="reviewScene"></select>
+				<select id="reviewStatus">
+					<option value="">全部状态</option>
+					<option value="untranslated">未翻译</option>
+					<option value="machine-translated">机翻</option>
+					<option value="human-reviewed">已人审</option>
+					<option value="__over">⚠ 超预算</option>
+				</select>
+				<input id="reviewFilter" type="search" placeholder="过滤原文/译文">
+				<button id="reviewInsertBtn">▶ 回填 ROM（allow-mt）</button>
+			</div>
+		</div>
+		<div id="reviewStats" class="stats"></div>
+		<div class="review-cols">
+			<div id="reviewTable" class="review-list"><div class="empty">加载中…</div></div>
+			<div id="reviewDetail" class="review-detail"><div class="empty">← 点击左侧条目查看/编辑</div></div>
+		</div>
+		<div id="insertLog" class="insert-log"><div class="hd">回填日志（work/insert-latest.log）</div><pre id="insertLogBody">（未运行）</pre></div>
+	</section>
+</main>
+
+<!-- ROM 浏览对话框 -->
+<div id="romModal" class="modal-overlay" hidden>
+	<div class="modal">
+		<div class="modal-head">
+			<b>选择 ROM</b>
+			<span class="hint">会重置模拟器状态与 hook；快照可恢复</span>
+			<button id="romCloseBtn">✕</button>
+		</div>
+		<div class="modal-path" id="romCurDir">（选择盘符）</div>
+		<div class="modal-list" id="romList"><div class="empty">加载中…</div></div>
+	</div>
+</div>
+<script src="glyph-format.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
