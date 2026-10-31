@@ -691,4 +691,4 @@ gbajs2 是一个功能完整、架构清晰的 GBA 模拟器实现。其模块�
 
 **文档生成时间**: 2026-03-15  
 **分析版本**: gbajs2 Community Fork  
-**代码库路径**: D:\vibecoding\gba-font-cracker-js\gbajs2
+**代码库路径**: D:\vibecoding\gba-font-studio\gbajs2

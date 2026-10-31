@@ -1,5 +1,5 @@
 {
-  "name": "gba-font-cracker-js-monorepo",
+  "name": "gba-font-studio-monorepo",
   "private": true,
   "version": "1.0.0",
   "description": "GBA Font Studio — GBA 宝可梦改版 ROM 中文字库/汉化工具集 monorepo（gbajs2 引擎 + pi-web 工作台 + Tauri 桌面客户端）",

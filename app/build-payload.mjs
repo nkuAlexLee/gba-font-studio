@@ -17,7 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(here, "..");            // gba-font-cracker-js/
+const ROOT = path.resolve(here, "..");            // gba-font-studio/
 // 火山方舟 plan 模型目录（agent-template/models.json 预置用；key 不入库，用户自行配置）
 const ARK_CATALOG = JSON.parse(fs.readFileSync(path.join(here, "ark-catalog.json"), "utf8"));
 const PIWEB = path.join(ROOT, "pi-web");

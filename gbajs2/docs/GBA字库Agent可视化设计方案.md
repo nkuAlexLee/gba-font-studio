@@ -9,7 +9,7 @@
 
 ## 一、现状盘点：三个资产各自提供什么
 
-### 1. pi（`D:\vibecoding\gba-font-cracker-js\pi`）
+### 1. pi（`D:\vibecoding\gba-font-studio\pi`）
 | 能力 | 对本项目的价值 |
 |---|---|
 | SDK `createAgentSession()`（packages/coding-agent/docs/sdk.md） | 可以编程方式内嵌 agent，自定义 tools/system prompt/资源加载 |
@@ -19,7 +19,7 @@
 | 工具结果支持 image content | `rom_screenshot` 直接把模拟器画面嵌进聊天流 |
 | `pi --mode rpc`（JSONL over stdin/stdout） | 若不想用 SDK 内嵌，可作为子进程被任意前端驱动 |
 
-### 2. pi-web（`D:\vibecoding\gba-font-cracker-js\pi-web`，Next.js）
+### 2. pi-web（`D:\vibecoding\gba-font-studio\pi-web`，Next.js）
 | 能力 | 对本项目的价值 |
 |---|---|
 | 直接读 pi 的 session 文件 + 实时事件流（`lib/agent-event-stream.ts`、`hooks/useAgentSession.ts`） | 聊天流、工具调用渲染**零开发**复用 |
