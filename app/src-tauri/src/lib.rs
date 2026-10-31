@@ -25,7 +25,43 @@ pub fn run() {
     main_inner();
 }
 
+/// 把自身进程挂入 kill-on-close 的 Job：子进程（pi-web → romctl serve 整棵树）随本进程
+/// 退出（窗口关闭/崩溃/被任务管理器杀）全部终止。否则孤儿 node 会锁住 payload 内文件，
+/// 升级安装报 "Error opening file for writing"（2026-09-10 教训）。
+/// 嵌套 Job 在 Win8+ 受支持；句柄故意不关闭 —— 本进程终止时它是最后一个句柄，触发整树 kill。
+#[cfg(windows)]
+fn setup_kill_on_exit_job() {
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return; // 创建失败不阻断启动，退回旧行为（手动清理）
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok != 0 {
+            AssignProcessToJobObject(job, GetCurrentProcess());
+        }
+        // 不调用 CloseHandle：句柄随进程生命周期存续
+    }
+}
+
+#[cfg(not(windows))]
+fn setup_kill_on_exit_job() {}
+
 fn main_inner() {
+    setup_kill_on_exit_job();
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
@@ -92,6 +128,10 @@ fn bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         ("GBA_SERVE_PORT", "8645".to_string()),
         ("GBA_WORKSPACE_DIR", workspace_dir.to_string_lossy().into_owned()),
     ];
+    // Git Bash 的 bash.exe 启动时检查 <gitbash根>/tmp 目录，缺失会每次 spawn bash 都打印
+    // "could not find /tmp, please create!" 警告（与 TMP/TEMP 环境变量无关；详见 build-payload.mjs 同注释）。
+    // 幂等创建，兑底覆盖旧版 payload 升级或用户误删的情况。
+    let _ = fs::create_dir_all(payload.join("runtime").join("gitbash").join("tmp"));
     // 捆绑的 Git Bash usr/bin 前置到 PATH（bash 工具/子进程可解析 ls、grep 等；
     // msys2 运行时会自动把该 Windows 路径转换为 POSIX /usr/bin）
     let gitbash_bin = payload.join("runtime").join("gitbash").join("usr").join("bin");
@@ -233,13 +273,84 @@ fn http_ok(host: &str, port: u16, path: &str) -> bool {
     head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.1 30")
 }
 
-/// 首次运行：把 payload 内模板复制到 workspace/agent 目录（幂等：不覆盖已有文件）
+/// 首次运行：把 payload 内模板复制到 workspace/agent 目录（幂等：不覆盖已有文件）；
+/// 升级时按模板指纹自动刷新 .pi/ 与未被改动的 AGENTS.md（见 refresh_workspace_templates）
 fn init_workspace(payload: &Path, workspace_dir: &Path) -> Result<(), String> {
     let template = payload.join("workspace-template");
     if !template.exists() {
         return Err(format!("workspace 模板缺失: {}", template.display()));
     }
-    copy_tree_if_absent(&template, workspace_dir)
+    copy_tree_if_absent(&template, workspace_dir)?;
+    refresh_workspace_templates(&template, workspace_dir);
+    Ok(())
+}
+
+/// 升级刷新：payload 模板带 .pi/.template-id 指纹（build-payload 写入：构建时间 +
+/// .pi 子树 FNV-1a 指纹 + AGENTS.md 指纹）。指纹与工作区现存不一致 → 覆盖刷新 .pi/ 子树
+/// （扩展/skill 随安装包更新，老用户不再拿旧版工具）；AGENTS.md 仅当工作区现存内容
+/// 与上次应用的模板指纹一致（未被 agent/用户改过）时替换，改过则保留。用户数据
+/// （roms/projects/work/sessions）永远不碰。旧版 payload 无指纹 → 跳过（行为同 1.0.x）。
+fn refresh_workspace_templates(template: &Path, ws: &Path) {
+    let tpl_id_path = template.join(".pi").join(".template-id");
+    let Ok(new_id_raw) = fs::read_to_string(&tpl_id_path) else { return };
+    let Ok(new_id) = serde_json::from_str::<serde_json::Value>(&new_id_raw) else { return };
+    let ws_id_path = ws.join(".pi").join(".template-id");
+    let old_id = fs::read_to_string(&ws_id_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or(serde_json::json!({}));
+
+    // 1) .pi 子树：指纹不同 → 覆盖复制（新增/更新文件；不删除工作区自有文件，避免误伤自定义内容）
+    let tpl_pi = new_id.get("pi").and_then(|v| v.as_str()).unwrap_or("");
+    let old_pi = old_id.get("pi").and_then(|v| v.as_str()).unwrap_or("");
+    if !tpl_pi.is_empty() && tpl_pi != old_pi {
+        eprintln!("[gba-app] workspace .pi 模板更新，刷新中…");
+        if copy_tree_overwrite(&template.join(".pi"), &ws.join(".pi")).is_err() {
+            eprintln!("[gba-app] workspace .pi 刷新失败（保留旧版继续启动）");
+        }
+    }
+
+    // 2) AGENTS.md：仅当未被改动（现存哈希 == 上次应用的模板哈希）时替换
+    let tpl_agents = template.join("AGENTS.md");
+    let ws_agents = ws.join("AGENTS.md");
+    if tpl_agents.exists() {
+        let applied = old_id.get("agentsMd").and_then(|v| v.as_str()).unwrap_or("");
+        let cur = fs::read(&ws_agents).ok().map(|b| fnv1a64(&b));
+        match cur {
+            None => { let _ = fs::copy(&tpl_agents, &ws_agents); } // 首建（copy_tree_if_absent 已处理，双保险）
+            Some(h) if !applied.is_empty() && &h == applied => { let _ = fs::copy(&tpl_agents, &ws_agents); }
+            Some(_) => {} // 用户/agent 改过 → 保留
+        }
+    }
+
+    let _ = fs::create_dir_all(ws.join(".pi"));
+    let _ = fs::write(&ws_id_path, &new_id_raw);
+}
+
+/// FNV-1a 64 位（与 build-payload.mjs 的 fnv64 同算法，跨版本稳定）
+fn fnv1a64(buf: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in buf {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
+/// 递归复制（目标存在时覆盖 → 仅用于模板刷新，不用于用户数据）
+fn copy_tree_overwrite(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(src).map_err(|e| format!("read_dir {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            fs::create_dir_all(&to).map_err(|e| e.to_string())?;
+            copy_tree_overwrite(&from, &to)?;
+        } else {
+            fs::copy(&from, &to).map_err(|e| format!("copy {}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn init_agent_dir(agent_dir: &Path, payload: &Path) -> Result<(), String> {
@@ -251,6 +362,12 @@ fn init_agent_dir(agent_dir: &Path, payload: &Path) -> Result<(), String> {
     let dst = agent_dir.join("settings.json");
     if tpl.exists() && !dst.exists() {
         fs::copy(&tpl, &dst).map_err(|e| e.to_string())?;
+    }
+    // models.json：预置 ark plan 供应商（仅首次安装写入；升级/重装不覆盖用户已改的模型配置）
+    let mtpl = payload.join("agent-template").join("models.json");
+    let mdst = agent_dir.join("models.json");
+    if mtpl.exists() && !mdst.exists() {
+        fs::copy(&mtpl, &mdst).map_err(|e| e.to_string())?;
     }
     let shell = payload.join("runtime").join("gitbash").join("usr").join("bin").join("bash.exe");
     if shell.exists() && dst.exists() {

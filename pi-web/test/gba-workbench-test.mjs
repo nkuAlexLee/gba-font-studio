@@ -51,16 +51,19 @@ try {
 	const load = await fetch(API + "/load?rom=" + encodeURIComponent(path.join(GBA, "roms", "pker.gba")));
 	if (!load.ok) throw new Error("/load 失败: " + (await load.text()).slice(0, 200));
 
-	const { chromium } = await import("file:///C:/Users/nkualexlee/AppData/Local/npm-cache/_npx/e41f203b7505f1fb/node_modules/playwright/index.mjs");
+	const { chromium } = await import("playwright");
 	const browser = await chromium.launch();
 	const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 	const errors = [];
 	page.on("pageerror", (e) => errors.push(String(e)));
 	page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 
-	await page.goto(BASE + "/gba-studio/index.html?api=" + API, { waitUntil: "networkidle" });
+	// 帧流经 WS 持续推送（60fps），networkidle 永不满足 → 用 domcontentloaded + 显式等待
+	await page.goto(BASE + "/gba-studio/index.html?api=" + API, { waitUntil: "domcontentloaded" });
+	await page.waitForSelector("#screen", { timeout: 15000 });
+	await sleep(2500); // 等首轮 pollStatus 与 WS 建连
 	check("studio 页面加载（pi-web public 托管形态）", true);
-	check("顶栏状态含 ROM 或提示", (await page.textContent("#statusLine")).length > 0);
+	check("顶栏状态行存在（内容已移至 pi-web 连接行，行本身设计为空）", (await page.$("#statusLine")) !== null);
 
 	// 面板 1: 模拟器（WS 跨源推帧 + 截图）
 	await page.click("#shotBtn");
@@ -73,6 +76,28 @@ try {
 	// 画面居中（flex 主轴居中）
 	const centered = await page.evaluate(() => getComputedStyle(document.querySelector(".screen-wrap")).alignItems === "center");
 	check("画面在工作台居中", centered);
+
+	// ★ 重新加载按钮 + ROM 文件夹记忆
+	const reloadOn = await page.$eval("#reloadRomBtn", (b) => !b.disabled);
+	check("重新加载按钮随 ROM 加载启用", reloadOn);
+	page.once("dialog", (d) => { void d.accept(); });
+	const st0 = await (await fetch(API + "/status")).json();
+	await page.click("#reloadRomBtn");
+	await sleep(1500);
+	const st1 = await (await fetch(API + "/status")).json();
+	check("重新加载重置帧计数", st1.ok && st1.frames <= st0.frames, `前 ${st0.frames} 后 ${st1.frames}`);
+	// 目录记忆：进一个盘 → 关闭 → 重开应回到该盘（而非盘符根）
+	await page.click("#openRomBtn");
+	await sleep(500);
+	await page.locator(".rom-row[data-dir]").first().click();
+	await sleep(500);
+	const dirShown = (await page.textContent("#romCurDir")).trim();
+	await page.click("#romCloseBtn");
+	await page.click("#openRomBtn");
+	await sleep(500);
+	const dirReopen = (await page.textContent("#romCurDir")).trim();
+	check("ROM 对话框记住上次文件夹", dirReopen === dirShown && dirReopen !== "（选择盘符）", `${dirShown} → ${dirReopen}`);
+	await page.click("#romCloseBtn");
 
 	// 面板 2: 流水线
 	await page.click('[data-tab="pipeline"]');
@@ -113,11 +138,11 @@ try {
 		check("字模画布有墨迹", false, "跳过");
 	}
 
-	// 面板 5: 审校（gba/translation-er）
+	// 面板 5: 审校（gba/translation-er；行结构为 div.rl-row —— 非旧版 table/tbody）
 	await page.click('[data-tab="review"]');
 	try {
-		await page.locator("#reviewTable tbody tr").first().waitFor({ timeout: 20000 });
-		check("审校表渲染", (await page.locator("#reviewTable tbody tr").count()) > 0);
+		await page.locator("#reviewTable .rl-row").first().waitFor({ timeout: 20000 });
+		check("审校表渲染", (await page.locator("#reviewTable .rl-row").count()) > 0);
 	} catch (e) {
 		check("审校表渲染", false, String(e).slice(0, 100));
 	}

@@ -83,6 +83,10 @@ status=conflict 的恢复：notes 含「原串已消失」且 mt 非空 → 改�
 
 ## 三、工具链（scripts/，bash 调用）
 
+> **⚠ cwd 要求**：下述 `cd` 以**工作区根**为起点（ROM 工程在 `.pi/projects/` 下也照此
+> 绝对定位：`cd <工作区根>/.pi/skills/gba-text-translate/scripts`，客户端工作区根 =
+> `data/workspace`）。不确定时先 `pwd` 再定位，勿从工程目录用 `../../` 硬凑。
+
 ```bash
 cd .pi/skills/gba-text-translate/scripts
 

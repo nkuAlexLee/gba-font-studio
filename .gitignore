@@ -69,6 +69,8 @@ translation-er/tmp/
 # ---- 历史遗留误拷贝 ----
 app/gbfp/
 .git.disabled/
+# 旧版 build-payload 生成的逐文件 resources 清单（现用 payload/**/* 通配，无代码引用）
+app/src-tauri/resources.json
 
 # ---- 非必要大目录（外部参考/历史镜像）----
 git-master/

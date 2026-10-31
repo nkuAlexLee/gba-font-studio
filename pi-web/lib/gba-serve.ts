@@ -8,7 +8,8 @@ import { spawn } from "node:child_process";
  * 环境变量：
  *   GBA_STUDIO_DIR   引擎目录（默认本仓库 gba/，即自包含运行时）
  *   GBA_SERVE_PORT   serve 端口（默认 8645，与 StudioPanel 默认端口一致）
- * 若端口已有 serve 在跑则不重复启动；pi-web 进程退出时连带回收子进程。
+ * 已有 serve 在跑则调 /fresh 原地重置为「未加载 ROM」干净状态（不重复启动、不换端口）；
+ * 无 serve 则以 ROMCTL_FRESH=1 拉起全新实例（不恢复上次状态文件）。pi-web 进程退出时连带回收子进程。
  *
  * 仅从 instrumentation.ts 的 nodejs 运行时分支动态导入（不进 Edge bundle）。
  */
@@ -21,20 +22,23 @@ export async function ensureRomctlServe(): Promise<void> {
     return;
   }
   try {
-    const res = await fetch(`http://127.0.0.1:${GBA_PORT}/status`, { signal: AbortSignal.timeout(1500) });
+    // 每次 App 启动都做一次干净初始化：模拟器不绑定任何 ROM（ROM 被移/移动不会让 serve 秒退）。
+    // 已有 serve 在跑 → 原地重置（不换端口，二次启动/残留进程都不会互相打架）。
+    const res = await fetch(`http://127.0.0.1:${GBA_PORT}/fresh`, { signal: AbortSignal.timeout(3000) });
     if (res.ok) {
-      console.log(`[gba] romctl serve :${GBA_PORT} 已在运行，不重复启动`);
+      console.log(`[gba] romctl serve :${GBA_PORT} 已在运行 → 已重置为「未加载 ROM」干净状态`);
       return;
     }
-  } catch { /* 端口无响应 → 需要启动 */ }
+  } catch { /* 无 serve 响应 → 需要拉起 */ }
 
+  // 没有 serve → 拉起全新实例（ROMCTL_FRESH=1：不恢复上次状态文件）
   const child = spawn(process.execPath, ["romctl.js", "serve", GBA_PORT], {
     cwd: GBA_DIR,
     stdio: "inherit", // romctl 日志直通当前终端
     windowsHide: true, // 不弹 cmd 黑框
-    env: { ...process.env, ROMCTL_NO_OPEN: "1" }, // 不自动弹 memview 浏览器窗口
+    env: { ...process.env, ROMCTL_NO_OPEN: "1", ROMCTL_FRESH: "1" }, // 不自动弹 memview；不恢复状态文件
   });
-  console.log(`[gba] romctl serve :${GBA_PORT} 已随 pi-web 启动 (pid ${child.pid})`);
+  console.log(`[gba] romctl serve :${GBA_PORT} 已随 pi-web 启动 (pid ${child.pid}，全新实例)`);
   console.log(`[gba] Studio 工作台: http://127.0.0.1:${GBA_PORT}/studio/index.html （pi-web 右侧「GBA」tab 可直接打开）`);
   child.on("exit", (code) => console.log(`[gba] romctl serve 退出 (${code})`));
 

@@ -42,10 +42,18 @@
 
 	/* ================= 顶栏状态 ================= */
 	let lastStatus = null;
+	// 模拟倍速：功能栏按钮循环 1x→2x→3x→1x（初始 1x；/status 轮询回显 serve 端状态）
+	let emuSpeed = 1;
+	const applySpeedLabel = () => { $('speedBtn').textContent = emuSpeed + 'x'; };
 	async function pollStatus() {
 		try {
 			lastStatus = await jget(API + '/status');
 			const s = lastStatus;
+			// 重新加载按钮：有 ROM 才可用（以 /status 的完整路径重发 /load）
+			$('reloadRomBtn').disabled = !(s && s.rom);
+			// 倍速同步：serve 端被外部改过（如另一面板/CLI）时回显
+			if (s && s.speed && s.speed !== emuSpeed) { emuSpeed = s.speed; applySpeedLabel(); }
+			$('reloadRomBtn').disabled = !(s && s.rom);
 			// ROM/帧信息已移至 pi-web 工作台「GBA」面板连接行；此处只保留 serve 版本与 hook 状态
 			const bits = []; // ROM/帧/版本已移至 pi-web 连接行
 			// hooks 通知不再进顶栏（该行只放功能按钮）；hook 流仍实时推送到模拟器面板
@@ -74,19 +82,38 @@
 	});
 
 	/* ================= ROM 浏览对话框（/browse + /load） ================= */
+	const ROM_DIR_KEY = 'gba-studio.romDir'; // 记住上次打开的文件夹（localStorage 持久化）
+	function savedRomDir() { try { return localStorage.getItem(ROM_DIR_KEY) || ''; } catch { return ''; } }
+	function rememberRomDir(d) { try { localStorage.setItem(ROM_DIR_KEY, d || ''); } catch { /* ignore */ } }
 	function openRomBrowser() {
 		$('romModal').hidden = false;
-		renderRomList('');
+		// 上次打开的文件夹优先；目录已失效时 renderRomList 内部自动回退盘符根
+		renderRomList(savedRomDir());
 	}
 	function closeRomBrowser() { $('romModal').hidden = true; }
 	$('openRomBtn').addEventListener('click', openRomBrowser);
 	$('romCloseBtn').addEventListener('click', closeRomBrowser);
 	$('romModal').addEventListener('click', (ev) => { if (ev.target === $('romModal')) closeRomBrowser(); });
+
+	/* 重新加载当前 ROM：以 /status 返回的完整路径重发 /load（重置状态与 hook） */
+	$('reloadRomBtn').addEventListener('click', async () => {
+		const romPath = (lastStatus || {}).rom || '';
+		if (!romPath) return;
+		if (!confirm('重新加载 ' + romPath + '？\n会重置模拟器状态与 hook（可用快照恢复）。')) return;
+		const btn = $('reloadRomBtn');
+		btn.disabled = true;
+		try {
+			await jget(API + '/load?rom=' + encodeURIComponent(romPath));
+		} catch (e) { alert('重新加载失败: ' + e.message); }
+		pollStatus();
+		btn.disabled = false;
+	});
 	async function renderRomList(dir) {
 		const list = $('romList');
 		list.innerHTML = '<div class="empty">加载中…</div>';
 		try {
 			const j = dir ? await jget(API + '/browse?dir=' + encodeURIComponent(dir)) : await jget(API + '/browse');
+			rememberRomDir(j.isRoot ? '' : j.dir); // 浏览过的目录都记住，下次对话框从这里开始
 			const sep = j.dir && (j.dir.endsWith('\\') || j.dir.endsWith('/')) ? '' : '\\';
 			const childDir = (e) => j.isRoot ? e.name : (j.dir + sep + e.name); // 根列表的条目名已是完整盘符
 			$('romCurDir').textContent = j.isRoot ? '（选择盘符）' : j.dir;
@@ -106,12 +133,17 @@
 					if (!confirm('加载 ' + romPath + '？\n会重置模拟器状态与 hook（可用快照恢复）。')) return;
 					try {
 						await jget(API + '/load?rom=' + encodeURIComponent(romPath));
+						rememberRomDir(romPath.slice(0, Math.max(romPath.lastIndexOf('\\'), romPath.lastIndexOf('/')))); // 加载成功 → 记住所在文件夹
 						closeRomBrowser();
 						pollStatus();
 					} catch (e) { alert('加载失败: ' + e.message); }
 				});
 			}
 		} catch (e) {
+			if (dir) { // 上次记忆的目录可能已不存在 → 回退盘符根（仅回退一次，避免死循环）
+				rememberRomDir('');
+				return renderRomList('');
+			}
 			list.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
 		}
 	}
@@ -154,6 +186,13 @@
 	});
 	$('stepBtn').addEventListener('click', () => jget(API + '/run?frames=1').then(pollStatus).catch((e) => alert(e.message)));
 	$('run60Btn').addEventListener('click', () => jget(API + '/run?frames=60').then(pollStatus).catch((e) => alert(e.message)));
+	// 模拟倍速：点击循环 1x → 2x → 3x → 1x（状态以 serve /speed 为准）
+	$('speedBtn').addEventListener('click', async () => {
+		const next = emuSpeed >= 3 ? 1 : emuSpeed + 1;
+		applySpeedLabel();
+		try { const r = await jget(API + '/speed?v=' + next); emuSpeed = r.speed || next; } catch (e) { /* serve 未连：仅本地标记 */ }
+		applySpeedLabel();
+	});
 	$('shotBtn').addEventListener('click', async () => {
 		try {
 			const r = await fetch(API + '/shot.png?file=studio-manual.png');
@@ -472,6 +511,14 @@
 		return n;
 	}
 	/* ================= 审校：左侧条目列表 + 右侧原文/译文详情 ================= */
+	// 渲染行数上限：全量塞 DOM（3 万+ 行）会让窗口宽度调整时的重排明显卡顿；
+	// 用筛选缩小范围即可看到其余条目（统计区有提示）
+	const REVIEW_RENDER_CAP = 500;
+	// 预览截断长度随列表宽度自适应（resize 后由防抖重渲染刷新）
+	function previewLen() {
+		const w = ($('reviewList') || {}).clientWidth || 380;
+		return Math.max(16, Math.floor(w / 7.5));
+	}
 	function renderReview() {
 		const sc = review.scenes[review.scene];
 		if (!sc) return;
@@ -485,10 +532,11 @@
 		const counts = Object.entries(sc.counts).map(([k, v]) => `<span class="stat-chip${k === 'machine-translated' ? ' b' : ''}${stSel === k ? ' active' : ''}" data-st="${esc(k)}" title="点击按此状态筛选">${esc(k)}: ${v}</span>`).join('')
 			+ `<span class="stat-chip${stSel === '__over' ? ' active' : ''}" data-st="__over" title="点击筛选超预算条目">⚠ 超预算</span>`
 			+ `<span class="stat-chip${!stSel ? ' active' : ''}" data-st="" title="点击清除筛选">全部</span>`;
-$('reviewStats').innerHTML = counts + `<span class="stat-chip">条目 ${sc.total}</span>`;
+$('reviewStats').innerHTML = counts + `<span class="stat-chip">条目 ${sc.total}${rows.length > REVIEW_RENDER_CAP ? ` · 已渲染前 ${REVIEW_RENDER_CAP}（筛选可缩小）` : ''}</span>`;
 		if (!review.sel || !rows.some((r) => r.id === review.sel)) review.sel = rows.length ? rows[0].id : null;
+		const shown = rows.slice(0, REVIEW_RENDER_CAP);
 		let html = '';
-		for (const r of rows) {
+		for (const r of shown) {
 			const finalText = r.final || r.mt || '';
 			const est = encodeLenCJK(finalText) + 1;
 			const over = r.max_bytes && est > +r.max_bytes;
@@ -496,7 +544,7 @@ $('reviewStats').innerHTML = counts + `<span class="stat-chip">条目 ${sc.total
 			const stCls = st === 'human-reviewed' ? 'ok' : st === 'machine-translated' ? 'warn' : 'dim';
 			html += `<div class="rl-row${r.id === review.sel ? ' sel' : ''}${over ? ' over' : ''}" data-id="${esc(r.id)}">
 				<div class="rl-top"><span class="id-col">${esc(r.id)}</span><span class="rl-status ${stCls}">${esc(st)}</span><span class="rl-bytes${over ? ' tl-error' : ''}">${est}/${r.max_bytes || '?'}B</span></div>
-				<div class="rl-prev">${esc(finalText.slice(0, 42)) || '<span class="dim">（未译）</span>'}</div>
+				<div class="rl-prev">${esc(finalText.slice(0, previewLen())) || '<span class="dim">（未译）</span>'}</div>
 			</div>`;
 		}
 		$('reviewTable').innerHTML = html || '<div class="empty">无匹配</div>';
@@ -511,6 +559,16 @@ $('reviewStats').innerHTML = counts + `<span class="stat-chip">条目 ${sc.total
 		}
 		renderDetail();
 	}
+
+	// 窗口宽度变化：防抖重渲染审校列表（预览截断长度随宽度自适应；行数已封顶，重排很轻）
+	let reviewResizeTimer = null;
+	window.addEventListener('resize', () => {
+		if (!review.ready) return;
+		const panel = $('panel-review');
+		if (!panel || panel.offsetParent === null) return; // 面板未显示时不重渲染
+		clearTimeout(reviewResizeTimer);
+		reviewResizeTimer = setTimeout(() => { if (review.ready) renderReview(); }, 200);
+	});
 	function renderDetail() {
 		const sc = review.scenes[review.scene];
 		const r = sc && sc.rows.find((x) => x.id === review.sel);

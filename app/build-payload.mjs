@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, "..");            // gba-font-cracker-js/
+// 火山方舟 plan 模型目录（agent-template/models.json 预置用；key 不入库，用户自行配置）
+const ARK_CATALOG = JSON.parse(fs.readFileSync(path.join(here, "ark-catalog.json"), "utf8"));
 const PIWEB = path.join(ROOT, "pi-web");
 // payload 落在短路径（NSIS 对 >260 字符的源路径会失败；默认仓库内路径太长）
 // 并以 junction（指向 <REAL>/payload）挂回 src-tauri/payload；resources 用相对路径 payload/**/*
@@ -59,7 +61,12 @@ if (!SKIP_NEXT) {
     if (!fs.existsSync(path.join(PIWEB, ".next", "BUILD_ID"))) fail("pi-web/.next 缺生产构建 — 先在 pi-web 目录执行 `npx next build`");
     cp(path.join(PIWEB, ".next"), path.join(pw, ".next"));
 } else {
-    log("跳过 .next 复制");
+    // ⚠ --skip-next-build 只表示复用 pi-web/.next 现有构建、省掉 next build 这一步（见 scripts/build-desktop.mjs）；
+    // .next 仍必须复制进 payload —— DEST 已清空重建，跳过复制会得到缺 .next 的残废包，
+    // 安装后 next start 报 "Could not find a production build"（2026-09-10 教训）
+    if (!fs.existsSync(path.join(PIWEB, ".next", "BUILD_ID"))) fail("pi-web/.next 缺生产构建 — 先在 pi-web 目录执行 `npx next build`，或去掉 --skip-next");
+    log("复用已有 pi-web/.next，照常复制进 payload …");
+    cp(path.join(PIWEB, ".next"), path.join(pw, ".next"));
 }
 // .next 内的 dev 残留/cache 不进安装包（NSIS 对超长路径会失败）
 for (const junk of [".next/dev", ".next/cache"]) rm(path.join(pw, junk));
@@ -156,6 +163,7 @@ fs.writeFileSync(path.join(ws, "AGENTS.md"), `# GBA Font Studio 工作区
 ## 流程纪律
 - 标准阶段：engine→font→charmap→export→translate→layout→insert→verify；每个里程碑调 \`pipeline_stage\` 带证据。
 - 回填前必须 \`text_validate\` 通过；写操作前先 \`rom_snap save\`。
+- 会话图片有预算：渠道对单请求图片数硬上限（30），扩展在阈值 25 自动降级为存盘路径+摘要；收到降级提示先 /compact 释放配额再继续。
 - 截图/字模以图片返回，可直接看图判断。
 
 ## 运行环境（Windows）
@@ -187,6 +195,30 @@ fs.mkdirSync(path.join(ws, "work"), { recursive: true });
 fs.writeFileSync(path.join(ws, "work", "README.md"),
     "# 流水线运行产物\n\npipeline.json（阶段状态，agent 的 pipeline_stage 工具维护）、报告、回填日志。\n");
 
+/* 5b. 模板指纹（.pi/.template-id）：lib.rs 升级时据此自动刷新工作区 .pi/ 与未改动的 AGENTS.md。
+ *     agentsMd = FNV-1a64（手写，与 lib.rs fnv1a64 同算法）；pi 指纹只需确定性即可（Rust 端仅比对，不重算）。 */
+{
+	const fold = (h, buf) => { for (const b of buf) { h ^= BigInt(b); h = (h * 0x100000001b3n) & 0xffffffffffffffffn; } return h; };
+	const SEED = 0xcbf29ce484222325n;
+	const files = [];
+	const walk = (dir, rel) => {
+		for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+			const fp = path.join(dir, f.name), rp = rel ? rel + "/" + f.name : f.name;
+			if (f.isDirectory()) walk(fp, rp);
+			else files.push({ rp, fp });
+		}
+	};
+	walk(path.join(ws, ".pi"), "");
+	files.sort((a, b) => (a.rp < b.rp ? -1 : 1));
+	let h = SEED;
+	for (const { rp, fp } of files) { h = fold(h, Buffer.from(rp, "utf8")); h = fold(h, Buffer.from([0])); h = fold(h, fs.readFileSync(fp)); }
+	fs.writeFileSync(path.join(ws, ".pi", ".template-id"), JSON.stringify({
+		built: new Date().toISOString(),
+		pi: h.toString(16).padStart(16, "0"),
+		agentsMd: fold(SEED, fs.readFileSync(path.join(ws, "AGENTS.md"))).toString(16).padStart(16, "0"),
+	}, null, "\t"));
+}
+
 /* 6. agent 模板（PI_CODING_AGENT_DIR 骨架）*/
 log("组装 agent-template …");
 const at = path.join(DEST, "agent-template");
@@ -194,6 +226,15 @@ fs.mkdirSync(path.join(at, "sessions"), { recursive: true });
 fs.writeFileSync(path.join(at, "settings.json"), JSON.stringify({
     // 新用户默认：主题跟随系统；模型/凭证由 UI 设置面板写入
     theme: "auto",
+}, null, 2));
+// models.json：预置火山方舟两个 plan 供应商（完整模型目录；**不带 key** —— 凭据由
+// 用户在 Models 面板输入，落 agent 目录 auth.json / env）。同名覆盖 pi-ai 内置项，
+// 即使未来 pi-ai 补丁被升级重置，本文件仍完整可用。
+fs.writeFileSync(path.join(at, "models.json"), JSON.stringify({
+    providers: {
+        "ark-agent-plan": { api: "openai-completions", baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3", models: ARK_CATALOG.agent },
+        "ark-coding-plan": { api: "openai-completions", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", models: ARK_CATALOG.coding },
+    },
 }, null, 2));
 
 /* 6b. 捆绑 Git Bash（bash 工具用；全新用户机器无 Git/WSL，pi 的 bash 会命中 System32 桩失败）
@@ -203,9 +244,23 @@ const GIT_SRC = process.env.GBA_GITBASH_SRC || "D:/Program Files/Git";
 const gitBinSrc = path.join(GIT_SRC, "usr", "bin");
 if (fs.existsSync(path.join(gitBinSrc, "bash.exe")) && fs.existsSync(path.join(gitBinSrc, "msys-2.0.dll"))) {
 	cp(gitBinSrc, path.join(DEST, "runtime", "gitbash", "usr", "bin"));
+	// Git for Windows 的 bash.exe 启动时检查 <gitbash根>/tmp 目录（与 TMP/TEMP 环境变量无关），
+	// 缺失则 agent 每次 spawn bash 都打印 "bash.exe: warning: could not find /tmp, please create!"。
+	// 完整安装版自带该目录；此处只拷了 usr/bin → 必须手动创建。
+	// NSIS resources 通配只匹配文件、不打包空目录 → 放占位文件保证目录进安装包。
+	const gitbashTmp = path.join(DEST, "runtime", "gitbash", "tmp");
+	fs.mkdirSync(gitbashTmp, { recursive: true });
+	fs.writeFileSync(path.join(gitbashTmp, ".keep"), "");
 	log(`Git Bash usr/bin → ${path.join(DEST, "runtime", "gitbash", "usr", "bin")}（${fs.readdirSync(path.join(gitBinSrc)).length} 个文件）`);
 } else {
 	log(`⚠ 未找到 Git Bash（${gitBinSrc}），跳过捆绑——bash 工具在新机器将不可用`);
+}
+
+/* 6c. 第三方许可声明（分发改件随附；BSD-3 要求二进制分发附带版权声明，GPL 组件提示见文件内） */
+const notices = path.join(ROOT, "THIRD-PARTY-NOTICES.md");
+if (fs.existsSync(notices)) {
+	fs.copyFileSync(notices, path.join(DEST, "THIRD-PARTY-NOTICES.md"));
+	log("THIRD-PARTY-NOTICES.md → payload 根（随安装包分发）");
 }
 
 /* 7. 生成 resources 清单（此 tauri-build 版本不通配，逐文件列出）*/

@@ -28,7 +28,9 @@ cd pi-web && npm install && npx next dev     # 或 npx next build + start
 cd gbajs2 && node romctl.js serve            # 默认 :8645；ROM 放 gbajs2/roms/
 #    工作台页面: pi-web 同源 /gba-studio/index.html?api=http://127.0.0.1:8645
 
-# 3) 桌面客户端安装包
+# 3) 桌面客户端安装包（一键：依赖→next build→payload→tauri，失败即停不吞错）
+npm run build:desktop                        # 仓库根执行；可选 --with-test/--skip-next/--skip-payload/--skip-tauri
+# 手动分步（排查问题时用）：
 cd app && npm install
 cd ../pi-web && npx next build               # Turbopack（--webpack 会 OOM）
 cd ../app && node build-payload.mjs          # 组装 payload → D:\gbfp（junction 挂回 src-tauri/payload）
@@ -88,3 +90,4 @@ cd pi-web && node test/gba-workbench-test.mjs && node test/piweb-integration-tes
 - **构建链路三步**（顺序固定）：`next build` → `build-payload.mjs` → `tauri build`；payload 实体落短路径 `D:\gbfp`（junction 挂回 `app/src-tauri/payload`），resources 必须用相对路径 `payload/**/*`。
 - **skill/扩展双副本纪律**：`gbajs2/.pi` 与 `pi-web/.pi` 两份副本改动需同步；`build-payload.mjs` 以 `pi-web/.pi` 为准组装 payload。
 - **用户数据与引擎分离**：翻译工程（与 ROM 绑定）在安装路径 `data/workspace/projects/` 动态创建，不入 payload。
+- **分发合规**：安装包随附 `payload/THIRD-PARTY-NOTICES.md` 与 `payload/gba/LICENSE`（gbajs2 引擎 BSD-3；Git Bash/MSYS2 按 GPL 再分发），清单见仓库根 `THIRD-PARTY-NOTICES.md`。

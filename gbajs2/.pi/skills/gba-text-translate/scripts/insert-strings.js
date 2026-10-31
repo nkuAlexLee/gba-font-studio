@@ -77,6 +77,10 @@ function main() {
 	const minPtrSrc = parseInt(config.min_pointer_source || '0xA0000', 16);   // 代码区护栏
 	const allowMt = !!args['allow-mt'];
 	const onlyId = args.only ? String(args.only).toLowerCase() : null;
+	const idMax = args['id-max'] ? parseInt(args['id-max'], 16) : null;   // 二分调试: 只处理 id < idMax
+	const idMin = args['id-min'] ? parseInt(args['id-min'], 16) : 0;     // 二分调试: 只处理 id >= idMin
+	const skipMin = args['skip-min'] ? parseInt(args['skip-min'], 16) : null;  // 二分调试: 跳过区间
+	const skipMax = args['skip-max'] ? parseInt(args['skip-max'], 16) : null;
 	const sceneFilter = args.scene;
 
 	const files = sceneFilter
@@ -93,6 +97,10 @@ function main() {
 		const scene = path.basename(f, '.csv');
 		for (const row of csv.readObjects(f)) {
 			if (onlyId && row.id.toLowerCase() !== onlyId) continue;
+			const rowOff = parseInt(row.id, 16);
+			if (idMax && !(rowOff >= 0 && rowOff < idMax)) continue;
+			if (!(rowOff >= idMin)) continue;
+			if (skipMin && rowOff >= skipMin && rowOff < skipMax) continue;
 			const rec = { id: row.id, scene, addr_gba: row.addr_gba, status: row.status, strategy: null };
 			// 选文本
 			let text = null;

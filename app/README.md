@@ -30,6 +30,8 @@ npx tauri build                  # 产物: src-tauri/target/release/bundle/nsis/
 └─ data/                       ★ 首启自动创建（用户数据，升级不覆盖）
    ├─ workspace/               ← agent 的工作区：AGENTS.md、.pi/skills、.pi/extensions、
    │                             roms/（放 ROM）、projects/（翻译工程，与 ROM 绑定）、work/（流水线产物）
+   │                             升级时 .pi/ 模板按指纹自动刷新；AGENTS.md 未被改动则同步更新，
+   │                             改过则保留；roms/projects/work 永不触碰
    ├─ agent/                   ← PI_CODING_AGENT_DIR：sessions/（含初始欢迎会话）、设置与凭证
    └─ logs/                    pi-web.log / romctl 日志
 ```
@@ -46,8 +48,16 @@ npx tauri build                  # 产物: src-tauri/target/release/bundle/nsis/
 
 ## 故障排查
 
-- **安全软件拦截**（腾讯电脑管家等会拦截"新复制的 exe"的回环连接：端口 LISTEN 但 HTTP 无响应）：
+- **升级安装报 `Error opening file for writing`**（锁的是 payload 内文件）：旧版本退出时残留的
+  后台 node（pi-web/romctl serve）锁住了文件。1.0.1 起已双重修复：客户端退出即整树终止
+  （Job Object），安装器安装前自动清理残留。手动救急：任务管理器结束路径位于安装目录
+  `payload\runtime\` 下的 node.exe（不要杀其它 node），或安装弹窗点 Retry。
+- **安全软件拦截**（腾讯电脑管家等会拦截“新复制的 exe”的回环连接：端口 LISTEN 但 HTTP 无响应）：
   客户端已内置自愈——捆绑 node 无响应时自动杀进程树并回退系统 node；
   两者都失败时会弹出指引窗口。建议把安装目录加入安全软件信任区。
+- **bash 工具警告 `could not find /tmp, please create!`**：Git for Windows 的 bash.exe 启动时检查
+  `<gitbash根>/tmp` 目录（与 `TMP`/`TEMP` 环境变量无关）。客户端已在打包时（build-payload）与
+  首启时（bootstrap 幂等创建）自动建好 `payload/runtime/gitbash/tmp/`；若手动精简过 payload，
+  重建该空目录即可消除。
 - 日志：`data/logs/pi-web.log`、`data/logs/romctl.log`。
 - 换 ROM / 工程定位：翻译工程在 `data/workspace/projects/<工程名>`（与具体 ROM 绑定，按需创建）。

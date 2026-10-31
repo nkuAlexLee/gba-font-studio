@@ -10,6 +10,7 @@
 <header id="topbar">
 	<div class="brand" title="GBA Font Studio"></div>
 	<button id="openRomBtn" title="浏览文件夹并加载 ROM">📂 打开 ROM</button>
+	<button id="reloadRomBtn" title="重新加载当前 ROM（重置状态与 hook，可用快照恢复）" disabled>🔁 重新加载</button>
 	<!-- 会话回放面板暂缓开放：保留 section 与逻辑，仅隐藏入口 -->
 	<nav id="tabs">
 		<button class="tab active" data-tab="screen">🎮 模拟器</button>
@@ -34,6 +35,7 @@
 					<button id="stepBtn">单帧 +1</button>
 					<button id="run60Btn">快进 60</button>
 					<button id="shotBtn">📸 截图</button>
+					<button id="speedBtn" title="模拟倍速：点击循环 1x → 2x → 3x → 1x（只影响实时播放，不影响 /run 快进）">1x</button>
 				</div>
 				<div class="btnrow pad">
 					<button data-key="UP">↑</button><button data-key="DOWN">↓</button>

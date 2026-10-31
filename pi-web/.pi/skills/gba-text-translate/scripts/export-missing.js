@@ -146,9 +146,10 @@ function main() {
 		const ids = new Set(all.map(r => r.id.toLowerCase()));
 		let n = 0;
 		for (const m of missing) {
-			if (ids.has(m.id)) continue;
+			const mid = m.off.toString(16).padStart(8, '0');
+			if (ids.has(mid)) continue;
 			all.push({
-				id: m.id, addr_gba: '0x' + (0x08000000 + m.off).toString(16), scene: 'main-text', context: '',
+				id: mid, addr_gba: '0x' + (0x08000000 + m.off).toString(16), scene: 'main-text', context: '',
 				max_bytes: String(m.byteLen), max_chars: String(Math.floor((m.byteLen - 1) / 2)),
 				en: m.text, mt: '', final: '', status: 'untranslated', notes: ' [add:census]'
 			});

@@ -643,6 +643,17 @@ class GameBoyAdvanceInterruptHandler {
 				this.cpu.gprs[0] = key / Math.pow(2, (180 - this.cpu.gprs[1] - this.cpu.gprs[2] / 256) / 12) >>> 0;
 				break;
 			default:
+				// ★崩溃现场记录（2026-09-10 pker 排查）：SWI 0xFF = CPU 跑飞执行数据（0xDFFF），记录现场供 /swilog 查询
+				try {
+					this.cpu.__swiCrash = {
+						opcode: opcode,
+						pc: this.cpu.gprs[this.cpu.PC] >>> 0,
+						lr: this.cpu.gprs[this.cpu.LR] >>> 0,
+						mode: this.cpu.execMode === this.cpu.MODE_THUMB ? 'thumb' : 'arm',
+						r0: this.cpu.gprs[0] >>> 0,
+						r5: this.cpu.gprs[5] >>> 0,
+					};
+				} catch (e) {}
 				throw (
 					"Unimplemented software interrupt: 0x" + opcode.toString(16)
 				);

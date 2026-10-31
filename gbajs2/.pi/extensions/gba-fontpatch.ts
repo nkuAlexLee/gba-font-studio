@@ -206,6 +206,100 @@ function savePipeline(p: Pipeline, pfile: string) {
 const workDir = (ctx?: ExtensionContext): string => (ctx?.cwd ? path.resolve(ctx.cwd) : ROOT);
 const pipelineFile = (ctx?: ExtensionContext): string => path.join(workDir(ctx), "work", "pipeline.json");
 
+/* ---------------- 会话图片预算 ----------------
+ * 渠道（如 Console Go 中转）对单次请求的图片数有硬上限（典型 30），超限整个请求 400:
+ * "Too many images in request: 31 > 30"。截图/字模等工具结果里的图会永久留在会话历史，
+ * 截图循环极易撞限。pi 的自动 compaction 按 token 阈值触发（大窗口模型下远晚于图片上限），
+ * 兜不住 —— 所以在扩展层计数，接近上限时降级为「存盘路径+画面摘要」并提示 /compact。
+ * 计数以会话文件为准（覆盖内置 read 等其它图片来源；compaction 后按 firstKeptEntryId 重算，
+ * 进程重启仍准确）；读不到会话文件（无 PI_SESSION_FILE）时退化为本进程兜底计数。 */
+const IMAGE_LIMIT = Math.max(6, parseInt(process.env.GBA_IMAGE_LIMIT || "30", 10) || 30);
+const IMAGE_BUDGET = Math.max(2, parseInt(process.env.GBA_IMAGE_BUDGET || "25", 10) || 25);
+const IMAGE_SOFT = Math.max(1, Math.min(IMAGE_BUDGET - 1, 5));
+const AUTO_COMPACT_AT = Math.max(0, parseInt(process.env.GBA_IMAGE_AUTOCOMPACT || "20", 10) || 20); // 图片数达到此值自动触发 compaction；0=关闭
+const IMAGE_KEEP = Math.min(24, Math.max(1, parseInt(process.env.GBA_IMAGE_KEEP || "4", 10) || 4)); // 请求时保留最近几张“活图”，其余虚拟化为文本
+const IMG_MARK = '"type":"image"';
+let imgScanCache: { size: number; mtime: number; count: number } | null = null;
+let imagesEmittedHere = 0;
+function pngSize(buf: Buffer): { w: number; h: number } | null {
+	if (buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50) return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+	return null;
+}
+function countContextImages(ctx?: ExtensionContext): number {
+	// 首选：内存中的上下文条目（权威、免文件 I/O、天然 compaction 感知；
+	// 客户端 agent 进程 env 没有 PI_SESSION_FILE，之前靠它计数会在恢复重会话时失明）
+	try {
+		const entries = ctx?.sessionManager?.buildContextEntries?.();
+		if (entries && entries.length) {
+			let n = 0;
+			for (const e of entries) {
+				const s = JSON.stringify(e);
+				if (!s) continue;
+				for (let i = s.indexOf(IMG_MARK); i !== -1; i = s.indexOf(IMG_MARK, i + 1)) n++;
+			}
+			return n;
+		}
+	} catch { /* fallthrough */ }
+	// 次选：会话文件扫描
+	const f = process.env.PI_SESSION_FILE || "";
+	if (f && fs.existsSync(f)) {
+		try {
+			const st = fs.statSync(f);
+			if (imgScanCache && imgScanCache.size === st.size && imgScanCache.mtime === st.mtimeMs) return imgScanCache.count;
+			const buf = fs.readFileSync(f, "latin1");
+			let start = 0;
+			const c = buf.lastIndexOf('"type":"compaction"');
+			if (c >= 0) {
+				// compaction 后旧图已不在上下文：从 firstKeptEntryId 对应条目起算；
+				// 解析/定位失败则从头数（宁可多算提前降级，不可少算撞 400）
+				const ls = buf.lastIndexOf("\n", c) + 1;
+				const le = buf.indexOf("\n", c);
+				let keptId = "";
+				try { keptId = (JSON.parse(buf.slice(ls, le === -1 ? undefined : le)) as { firstKeptEntryId?: string }).firstKeptEntryId || ""; } catch { /* keptId 为空 → 从头数 */ }
+				if (keptId) {
+					const k = buf.indexOf('"id":"' + keptId + '"');
+					if (k >= 0) start = k;
+				}
+			}
+			let n = 0;
+			for (let i = buf.indexOf(IMG_MARK, start); i !== -1; i = buf.indexOf(IMG_MARK, i + IMG_MARK.length)) n++;
+			imgScanCache = { size: st.size, mtime: st.mtimeMs, count: n };
+			return n;
+		} catch { /* 读不到 → 兜底 */ }
+	}
+	return imagesEmittedHere;
+}
+let autoCompactPending = false; // compaction 进行中不再重复触发（完成/失败事件复位）
+let virtOk = false; // 请求时虚拟化是否已生效（context 事件至少成功跑过一次）
+/** 图片数达阈值时自动触发 compaction——代替仅提示 agent 手动 /compact；
+ *  恢复已超限的会话时同样自愈（ctx.compact() 异步执行，不阻塞本工具结果） */
+function maybeAutoCompact(count: number, ctx?: ExtensionContext): string {
+	if (!AUTO_COMPACT_AT || autoCompactPending || count < AUTO_COMPACT_AT) return "";
+	if (typeof ctx?.compact !== "function") return "";
+	try {
+		ctx.compact();
+		autoCompactPending = true;
+		return "已自动触发 /compact —— 旧截图将折叠为摘要，配额在完成后释放。";
+	} catch { return ""; }
+}
+/** 计划再附 adding 张图时的预算判定；over=true 时调用方必须停止附图 */
+function imageBudget(adding: number, ctx?: ExtensionContext): { over: boolean; warn: boolean; count: number; note: string } {
+	const count = countContextImages(ctx);
+	const after = count + adding;
+	if (virtOk) {
+		// 请求时旧图已被虚拟化替换：实际发送图数恒 ≤ IMAGE_KEEP，渠道 30 图上限不会触发
+		return { over: false, warn: false, count: Math.min(after, IMAGE_KEEP), note: "" };
+	}
+	const stat = `图片预算 ${count}→${after}/${IMAGE_LIMIT}（降级阈值 ${IMAGE_BUDGET}）`;
+	const auto = maybeAutoCompact(after, ctx);
+	if (after > IMAGE_BUDGET) {
+		const how = auto || "请先执行 /compact 把旧截图折叠为摘要、释放配额后再重新获取。";
+		return { over: true, warn: true, count, note: `⚠ ${stat} — 已停止附图（渠道对单请求图片数有硬上限，超限整个请求会被拒 400）。${how}⚠ 本张图片已存盘但不要用 read 打开——read 会把图拉回上下文，继续超限；需要画面信息时先用画面摘要（尺寸/与上张差异）判断。` };
+	}
+	if (count + adding >= IMAGE_BUDGET - IMAGE_SOFT) return { over: false, warn: true, count, note: `⚠ ${stat} — 接近上限。${auto || "建议本轮验证结束后 /compact。"}` };
+	return { over: false, warn: false, count, note: "" };
+}
+
 /* ---------------- 扩展主体 ---------------- */
 export default function gbaFontpatch(pi: ExtensionAPI) {
 	let lastWidgetLines: string[] = [];
@@ -223,7 +317,44 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 	};
 	const event = (data: Record<string, unknown>) => { try { pi.appendEntry("gba.event", data); } catch { /* 无会话时忽略 */ } };
 
-	pi.on("session_start", async (_ev, ctx) => { updateWidget(ctx); });
+	pi.on("session_start", async (_ev, ctx) => { imgScanCache = null; updateWidget(ctx); });
+	// compaction 后旧图退出上下文：清扫描缓存与兜底计数，下次重新统计
+	try { pi.on("session_compact", async () => { imagesEmittedHere = 0; imgScanCache = null; autoCompactPending = false; }); } catch { /* 旧版本无此事件 */ }
+	try { pi.on("session_compact_failed", async () => { autoCompactPending = false; }); } catch { /* 事件不存在时忽略 */ }
+
+	/* ---- 请求时图片虚拟化：会话历史保留原图，仅发送最近 IMAGE_KEEP 张，其余替换为文本注记。
+	 *     渠道 30 图上限从此不触发（配额与 token 双省）；Studio 看板/回放不受影响；
+	 *     失败则原样发送，由预算降级/自动 compact 兑底。---- */
+	pi.on("context", async (ev) => {
+		try {
+			const msgs = (ev as { messages?: unknown[] }).messages || [];
+			let seen = 0, replaced = 0;
+			for (let mi = msgs.length - 1; mi >= 0; mi--) {
+				const content = (msgs[mi] as { content?: unknown } | undefined)?.content;
+				if (!Array.isArray(content)) continue;
+				for (let bi = content.length - 1; bi >= 0; bi--) {
+					const block = content[bi] as { type?: string } | undefined;
+					if (!block || block.type !== "image") continue;
+					seen++;
+					if (seen <= IMAGE_KEEP) continue; // 保留最近几张活图
+					let path = "";
+					for (const b of content as Array<{ type?: string; text?: string }>) {
+						if (b?.type === "text" && b.text) {
+							const m = b.text.match(/[^\s"'<>]+\.(?:png|bmp|jpg|jpeg)/i);
+							if (m) { path = m[0]; break; }
+						}
+					}
+					content[bi] = { type: "text", text: path
+						? `[旧截图已省略（会话历史仍保留原图）→ ${path}；agent 当时已直接查看并分析]`
+						: `[旧截图已省略（会话历史仍保留原图；agent 当时已直接查看并分析）]` };
+					replaced++;
+				}
+			}
+			virtOk = true;
+			if (replaced) return { messages: msgs };
+		} catch { /* 虚拟化失败 → 原样发送，预算降级/自动 compact 兑底 */ }
+	});
+	let lastShot: { file: string; buf: Buffer } | null = null;
 
 	const text = (s: string) => [{ type: "text" as const, text: s }];
 	const fail = (e: unknown) => ({ content: text(`✘ ${e instanceof Error ? e.message : String(e)}`), isError: true as const, details: {} });
@@ -312,13 +443,14 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 		label: "按键运行",
 		description: "按住按键运行 N 帧后松开（如 START 打开菜单、A 确认）。keys 逗号分隔：A,B,L,R,START,SELECT,UP,DOWN,LEFT,RIGHT",
 		parameters: Type.Object({
-			keys: Type.String({ description: "按键，逗号分隔" }),
-			frames: Type.Number({ description: "按住帧数，默认 60" }),
+			keys: Type.Optional(Type.String({ description: "按键，逗号分隔（如 A / START / UP,A）。缺省 = 只跑 frames 帧不按键" })),
+			frames: Type.Optional(Type.Number({ description: "按住帧数，默认 60" })),
 		}),
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			try {
 				const n = Math.max(1, Math.min(params.frames ?? 60, 3600));
-				const out = await commandRomctl("/key?keys=" + encodeURIComponent(params.keys) + "&frames=" + n, ["key", params.keys, String(n)]);
+				const keys = params.keys || "";
+				const out = await commandRomctl("/key?keys=" + encodeURIComponent(keys) + "&frames=" + n, ["key", keys, String(n)]);
 				updateWidget(ctx);
 				return { content: text(`按键 ${params.keys} × ${n} 帧: ` + out), details: {} };
 			} catch (e) { return fail(e); }
@@ -328,7 +460,7 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 	pi.registerTool(defineTool({
 		name: "rom_screenshot",
 		label: "模拟器截图",
-		description: "截图当前画面并返回 PNG 图片（模型可直接看图）。默认先跑 1 帧保证画面新鲜。截图同时存 tmp/ 供 Studio 看板引用，并写入会话事件。",
+		description: "截图当前画面并返回 PNG 图片（模型可直接看图）。默认先跑 1 帧保证画面新鲜。截图同时存 tmp/ 供 Studio 看板引用，并写入会话事件。会话附图接近渠道上限时自动降级为「存盘路径+画面摘要」并提示 /compact（防 400 Too many images）。",
 		parameters: Type.Object({
 			frames: Type.Number({ description: "截图前先运行的帧数，默认 1；0 表示不跑帧" }),
 		}),
@@ -343,12 +475,28 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 				});
 				if (r.status !== 200) throw new Error(r.body.toString("utf8").slice(0, 300));
 				event({ kind: "screenshot", frames: n, file: "tmp/" + file });
+				const png = r.body;
+				const dim = pngSize(png);
+				const dimText = dim ? `${dim.w}x${dim.h}` : `${png.length}B`;
+				let diffText = "";
+				if (lastShot && lastShot.buf.equals(png)) diffText = "；画面与上张截图完全相同";
+				else if (lastShot) diffText = "；画面较上张有变化";
+				lastShot = { file, buf: png };
+				const budget = imageBudget(1, ctx);
+				if (budget.over) {
+					// 降级：不附图（超限会连整个请求一起 400），只回存盘路径 + 摘要 + /compact 提示
+					return {
+						content: text(`截图完成: tmp/${file}（${dimText}${diffText}）\n${budget.note}`),
+						details: { file: "tmp/" + file, frames: n, imageCount: budget.count, degraded: true },
+					};
+				}
+				if (!process.env.PI_SESSION_FILE) imagesEmittedHere++;
 				return {
 					content: [
-						{ type: "text", text: `截图完成，已存 tmp/${file}（可用 rom_status 查看当前帧数）` },
-						{ type: "image", data: r.body.toString("base64"), mimeType: "image/png" },
+						{ type: "text", text: `${budget.note ? budget.note + "\n" : ""}截图完成: tmp/${file}（${dimText}${diffText}；可用 rom_status 查看当前帧数）` },
+						{ type: "image", data: png.toString("base64"), mimeType: "image/png" },
 					],
-					details: { file: "tmp/" + file, frames: n },
+					details: { file: "tmp/" + file, frames: n, imageCount: budget.count + 1 },
 				};
 			} catch (e) { return fail(e); }
 		},
@@ -578,18 +726,22 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 	pi.registerTool(defineTool({
 		name: "font_glyph_render",
 		label: "渲染字模",
-		description: "把字符的字模从 11x11 字库渲染为 PNG 图片返回（模型可直接看字形；用于验证字库注入/码表映射）。一次最多 16 个字符。",
+		description: "把字符的字模从 11x11 字库渲染为 PNG 图片返回（模型可直接看字形；用于验证字库注入/码表映射）。一次最多 16 个字符。接近会话图片预算时仅附部分图，其余存盘为路径（/compact 后可用相同参数重渲染）。",
 		parameters: Type.Object({
 			chars: Type.String({ description: "要渲染的字符（汉字/符号），最多 16 个" }),
 		}),
-		async execute(_id, params) {
+		async execute(_id, params, _signal, _onUpdate, ctx) {
 			try {
 				const chars = [...params.chars].slice(0, 16);
 				if (!chars.length) throw new Error("chars 为空");
 				const cm = loadCharmap();
 				const fontBuf = fs.readFileSync(FONT_BIN);
+				const budget = imageBudget(chars.length, ctx); // 按计划张数预估（保守：未命中码表的字也会计入）
+				const remain = Math.max(0, IMAGE_BUDGET - budget.count);
+				fs.mkdirSync(TMP_DIR, { recursive: true });
 				const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
 				const lines: string[] = [];
+				let rendered = 0, attached = 0;
 				for (const ch of chars) {
 					const entry = cm.find((e) => e.value === ch);
 					if (!entry) { lines.push(`${ch}: 码表中未找到`); continue; }
@@ -600,12 +752,25 @@ export default function gbaFontpatch(pi: ExtensionAPI) {
 						lines.push(`${ch} (0x${entry.code.toString(16)}): 字模解码失败 — ${e instanceof Error ? e.message : e}`);
 						continue;
 					}
-					lines.push(`${ch} → 码 0x${entry.code.toString(16)} → 字模 #${(fixHi(entry.code >> 8) * 0xf7 + (entry.code & 0xff)) >>> 0}`);
-					content.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+					rendered++;
+					const gid = `字模 #${(fixHi(entry.code >> 8) * 0xf7 + (entry.code & 0xff)) >>> 0}`;
+					const gfile = `glyph-${ch.charCodeAt(0).toString(16)}-${entry.code.toString(16)}.png`;
+					fs.writeFileSync(path.join(TMP_DIR, gfile), png);
+					if (attached < remain) {
+						lines.push(`${ch} → 码 0x${entry.code.toString(16)} → ${gid}`);
+						content.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+						attached++;
+					} else {
+						lines.push(`${ch} → 码 0x${entry.code.toString(16)} → ${gid}（图片预算已满，未附图，已存 tmp/${gfile}）`);
+					}
 				}
-				if (!content.length) throw new Error("没有任何字符渲染成功");
-				content.unshift({ type: "text", text: "字模渲染（11x11 原始点阵，白=空/黑=墨）:\n" + lines.join("\n") });
-				return { content, details: {} };
+				if (!rendered) throw new Error("没有任何字符渲染成功");
+				if (!process.env.PI_SESSION_FILE) imagesEmittedHere += attached; // 无会话文件时用兜底计数（有文件时下次扫描自然统计）
+				const notes: string[] = [];
+				if (budget.note) notes.push(budget.note);
+				if (attached < rendered) notes.push(`本次渲染 ${rendered} 字仅附 ${attached} 图（图片预算限制）；未附图已存 tmp/，或执行 /compact 后用相同参数重渲染。`);
+				content.unshift({ type: "text", text: `字模渲染（11x11 原始点阵，白=空/黑=墨）:\n${lines.join("\n")}${notes.length ? "\n" + notes.join("\n") : ""}` });
+				return { content, details: { imageCount: budget.count + attached, attached, degraded: attached < rendered } };
 			} catch (e) { return fail(e); }
 		},
 	}));

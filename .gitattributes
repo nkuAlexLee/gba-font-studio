@@ -1,0 +1,33 @@
+# 行尾与二进制保护（根治 skill/扩展双副本 CRLF/LF 漂移假象；双副本纪律见根 AGENTS.md 约定 2）
+# 文本：入库统一 LF，检出一律 LF（Windows 下 VSCode/Git Bash/Next.js 均无碍）
+* text=auto eol=lf
+
+# Windows 专属脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# ---- 二进制：禁止任何行尾转换与文本 diff ----
+*.bin  binary
+*.gba  binary
+*.sav  binary
+*.ss1  binary
+*.bmp  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.icns binary
+*.exe  binary
+*.dll  binary
+*.ttf  binary
+*.otf  binary
+*.woff  binary
+*.woff2 binary
+*.zip  binary
+*.7z   binary
+*.xz   binary
+*.wasm binary
+*.node binary

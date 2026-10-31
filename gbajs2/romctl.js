@@ -206,6 +206,16 @@ function hexdump(read, base, len) {
 const { GameBoyAdvance, ThumbDisassembler, biosBin } = buildContext();
 global.__makeCanvas = makeCanvasStub;
 
+// ★BIOS 扩展（2026-09-10 pker 排查定论）：官方 stub 仅 220B(0xDC)，ER 转场会直接调用
+// BIOS 0xAB0-0xDB0 的内部例程（真机真 BIOS 有代码），越界读返回 0xFFFFFFFF =
+// ARM `SWI 0xFFFFFF` → "Unimplemented software interrupt: 0xff" 崩溃（蓝屏冻结）。
+// 修复：扩到 16KB，0xDC 以外全部填 `mov pc,lr`(0xE1A0F00E)，越界 BIOS 调用安全返回。
+const __biosFull = new Uint8Array(0x4000);
+__biosFull.set(new Uint8Array(biosBin), 0);
+const __biosU32 = new Uint32Array(__biosFull.buffer);
+for (let __i = 0xDC >> 2; __i < __biosU32.length; __i++) __biosU32[__i] = 0xe1a0f00e;
+const biosBinFull = __biosFull.buffer;
+
 const gba = new GameBoyAdvance();
 // Node 无 AudioContext：audio.js 的环形缓冲只在 context 存在时分配，
 // 手动补齐，让 /audio 端点能取到样本（32768Hz，与浏览器播放端一致）
@@ -236,7 +246,7 @@ let lastError = null;
 gba.setLogger((level, error) => {
 	lastError = error instanceof Error ? error.message : String(error);
 });
-gba.setBios(biosBin);
+gba.setBios(biosBinFull);
 gba.__swiLog = gba.__swiLog || [];
 const dis = new ThumbDisassembler(gba.mmu);
 
@@ -288,16 +298,20 @@ if (cmd !== 'serve') {
 		console.warn(`[提示] serve 正在运行（端口 ${lock.port}），当前为只读访问，数据来自状态文件落盘快照（最多滞后 ~600 帧）`);
 	}
 }
-if (cmd !== 'load' && fs.existsSync(stateFile)) {
+if (cmd !== 'load' && !process.env.ROMCTL_FRESH && fs.existsSync(stateFile)) {
 	meta = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-	if (!meta.__snapshot) throw new Error('状态文件不存在或无效: ' + stateFile + '（先执行 load）');
-	if (!fs.existsSync(meta.rom)) throw new Error('找不到 ROM: ' + meta.rom + '（请重新 load）');
-	// 先加载 ROM（resetCPU + 内存映射），再覆盖快照状态
-	const romBuf = fs.readFileSync(meta.rom);
-	gba.setRom(romBuf.buffer.slice(romBuf.byteOffset, romBuf.byteOffset + romBuf.byteLength));
-	restoreSnapshot(meta.__snapshot);
-	meta.__snapshot = null;
-	loadHooksFromMeta();
+	if (meta.rom) {
+		if (!fs.existsSync(meta.rom)) throw new Error('找不到 ROM: ' + meta.rom + '（请重新 load，或设 ROMCTL_FRESH=1 跳过恢复）');
+		if (!meta.__snapshot) throw new Error('状态文件不存在或无效: ' + stateFile + '（先执行 load）');
+		// 先加载 ROM（resetCPU + 内存映射），再覆盖快照状态
+		const romBuf = fs.readFileSync(meta.rom);
+		gba.setRom(romBuf.buffer.slice(romBuf.byteOffset, romBuf.byteOffset + romBuf.byteLength));
+		restoreSnapshot(meta.__snapshot);
+		meta.__snapshot = null;
+		loadHooksFromMeta();
+	} else {
+		meta.__snapshot = null; // 干净状态（/fresh 后）：不恢复，等下一次 /load
+	}
 }
 
 /*
@@ -363,10 +377,14 @@ function unb64(s) {
  * ------------------------------------------------------------------ */
 
 function installHook() {
-	if (hookInstalled) return;
 	const cpu = gba.cpu;
+	if (!cpu || typeof cpu.step !== 'function') return; // CPU 半初始化：交由 ensureCpuReady 自愈后再装
+	// ⚠ resetCPU() 会重新赋值 cpu.step（wrapper 随之丢失），因此“是否已包”以 cpu.step 上的标记
+	// 为准，而非 hookInstalled 布尔——否则自愈/内部 reset 后标志漂移会造成探针静默零命中
+	hookInstalled = true;
+	if (cpu.step.__gbaHook === true) return; // 已包（resetCPU 未再发生）→ 仅对齐标志
 	const origStep = cpu.step.bind(cpu);
-	cpu.step = function () {
+	const wrapped = function () {
 		if (hookMap.size) {
 			const pc = (this.gprs[15] - this.instructionWidth) >>> 0;
 			if ((pc >= 0x08000000 && pc < 0x0a000000) || (pc >= 0x02000000 && pc < 0x02040000)) {
@@ -376,7 +394,8 @@ function installHook() {
 		}
 		return origStep();
 	};
-	hookInstalled = true;
+	wrapped.__gbaHook = true;
+	cpu.step = wrapped;
 }
 
 function loadHooksFromMeta() {
@@ -435,6 +454,7 @@ function flushHookEvents() {
 const SESSION_DIR = path.join(TMP_DIR, 'session');
 let sess = { on: false, seq: 0, lastShotFrame: -1 };
 let heldMask = 0; // /pad 联机按键状态（KEYMAP 位掩码，取反后写 keypad）
+let emuSpeed = 1; // 模拟倍速（1/2/3）：实时帧泵每帧预算 = 16.7ms / speed，初始 1x（真机 59.73fps）
 let audioSentPtr = -1; // /audio 已发送到的音频环形缓冲位置（-1=待同步）
 let audioSentByPid = new Map(); // 每标签独立音频流指针（cid → 环位置）
 let activePlayer = null; // 当前播放权持有者（cid）：新标签自动接管，旧标签被 409 拒绝
@@ -528,7 +548,7 @@ function ensureCpuReady() {
 		if (rom && fs.existsSync(rom)) {
 			const buf = fs.readFileSync(rom);
 			if (gba.setRom(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)) !== false) {
-				if (typeof gba.cpu.step === 'function') { meta.frames = 0; console.error('[romctl] 自愈成功：已重载', rom); return true; }
+				if (typeof gba.cpu.step === 'function') { meta.frames = 0; installHook(); /* 自愈重置了 cpu.step（wrapper 被洗掉）→ 立即重装探针，否则零命中 */ console.error('[romctl] 自愈成功：已重载', rom); return true; }
 			}
 		}
 	} catch (e) { console.error('[romctl] 自愈失败:', e.message); }
@@ -736,6 +756,7 @@ switch (cmd) {
 			pc: '0x' + (gba.cpu.gprs[15] >>> 0).toString(16),
 			mode: gba.cpu.execMode === gba.cpu.MODE_THUMB ? 'THUMB' : 'ARM',
 			warn: lastError || undefined,
+			hookWrapped: gba.cpu.step && gba.cpu.step.__gbaHook === true,
 		});
 		/* ==================== Studio/扩展支撑端点（2026-09）====================
 		 * 为 GBA Font Studio 网页面板与 pi 扩展 gba-fontpatch 提供数据：
@@ -902,8 +923,15 @@ switch (cmd) {
 				const j = (obj) => { res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); out = JSON.stringify(obj); };
 				const jbin = (buf, type) => { res.writeHead(200, { 'Content-Type': type, 'Access-Control-Allow-Origin': '*' }); out = buf; };
 				switch (u.pathname) {
+					case '/speed': {
+						// ★模拟倍速（工作台功能栏按钮）：只影响实时帧泵的节流预算（/run 工具路径不节流不受影响）
+						const v = Math.min(3, Math.max(1, parseInt(q.get('v') || '1', 10) || 1));
+						emuSpeed = v;
+						j({ ok: true, speed: emuSpeed });
+						break;
+					}
 					case '/status':
-						j({ ok: true, v: SERVE_VERSION, rom: meta.rom, frames: meta.frames, held: heldMask, session: sess.on ? { seq: sess.seq } : null, hooks: (meta.hooks || []).map(h => ({ addr: '0x' + h.addr.toString(16), name: h.name })), ...cpuInfo() });
+						j({ ok: true, v: SERVE_VERSION, rom: meta.rom, frames: meta.frames, held: heldMask, speed: emuSpeed, session: sess.on ? { seq: sess.seq } : null, hooks: (meta.hooks || []).map(h => ({ addr: '0x' + h.addr.toString(16), name: h.name })), ...cpuInfo() });
 						break;
 					case '/roms': {
 						const dir = path.join(__dirname, 'roms');
@@ -1009,6 +1037,7 @@ switch (cmd) {
 							const snap = JSON.parse(fs.readFileSync(f, 'utf8'));
 							if (path.resolve(snap.rom) !== path.resolve(meta.rom)) throw new Error('ROM 不一致: ' + snap.rom);
 							restoreSnapshot(snap.__snapshot);
+							installHook(); // 快照恢复后确保探针在当前 cpu.step 上（defrost 不动 step，此处为防御性重挂）
 							meta.frames = snap.frames || 0;
 							lastPersistFrame = meta.frames;
 							saveState();
@@ -1023,6 +1052,7 @@ switch (cmd) {
 							if (path.resolve(snap.rom) !== path.resolve(meta.rom))
 								throw new Error('当前加载的 ROM 与录制时不一致: ' + snap.rom);
 							restoreSnapshot(snap.__snapshot);
+							installHook(); // 快照恢复后确保探针在当前 cpu.step 上
 							meta.frames = snap.frames || 0;
 							lastPersistFrame = meta.frames;
 							const pd = gba.video.renderPath.pixelData;
@@ -1078,6 +1108,25 @@ switch (cmd) {
 						}
 						gba.mmu.loadSavedata(ab);
 						j({ ok: true, file: savPath, size: sbuf.length, saveType: gba.mmu.save.constructor.name });
+						break;
+					}
+					case '/fresh': {
+						// ★App 每次启动都会调（gba-serve.ts）：原地重置为“未加载 ROM”干净状态，与全新 serve 等价。
+						// 动机：上次会话的 ROM 被移动/删除曾让 serve 启动恢复直接崩（秒退）；hooks/快照跨会话
+						// 残留也会造成探针假象。解绑卡带 + 清 hooks/watch/崩溃现场 + 删状态文件。
+						hookMap = new Map(); meta.hooks = []; installHook();
+						global.__watchIO = [];
+						gba.__swiLog = []; delete gba.cpu.__swiCrash;
+						try {
+							const mmu = gba.mmu, R = mmu.REGION_CART0;
+							for (const slot of [R, R + 1, mmu.REGION_CART1, mmu.REGION_CART1 + 1, mmu.REGION_CART2, mmu.REGION_CART2 + 1]) mmu.memory[slot] = null;
+							gba.rom = null;
+						} catch (e) { /* 保底：解绑失败不阻塞重置 */ }
+						gba.reset();
+						meta = { frames: 0, rom: null };
+						try { if (fs.existsSync(stateFile)) fs.rmSync(stateFile); } catch (e) {}
+						lastPersistFrame = 0;
+						j({ ok: true, op: 'fresh' });
 						break;
 					}
 					case '/load': {
@@ -1324,6 +1373,7 @@ const addr = parseAddr(q.get('addr'));
 							if (rec.emuVer !== EMU_VER) problems.push('模拟器代码版本不符: 快照=' + rec.emuVer + ' 当前=' + EMU_VER + '（旧 bug 代码产出的状态可能已污染，建议新代码下重录）');
 							if (problems.length && q.get('force') !== '1') throw new Error(problems.join('; ') + '（确信无影响可加 &force=1）');
 							restoreSnapshot(rec.__snapshot);
+							installHook(); // 快照恢复后确保探针在当前 cpu.step 上
 							meta.frames = rec.frames || 0;
 							lastPersistFrame = meta.frames;
 							saveState();
@@ -1389,7 +1439,7 @@ const addr = parseAddr(q.get('addr'));
 						break;
 					}
 					case '/swilog': {
-						j({ ok: true, log: (gba.__swiLog || []).slice(-80) });
+						j({ ok: true, log: (gba.__swiLog || []).slice(-80), crash: gba.cpu && gba.cpu.__swiCrash ? gba.cpu.__swiCrash : null });
 						break;
 					}
 					case '/flashlog': {
@@ -1765,7 +1815,7 @@ const addr = parseAddr(q.get('addr'));
 				}
 				// ★必须让出事件循环（setImmediate 还栈处理 I/O），否则同步泵会饿死一切收包
 				await new Promise(r => setImmediate(r));
-				preciseSleep(16.7 - (Date.now() - t0));
+				preciseSleep(16.7 / emuSpeed - (Date.now() - t0));
 			}
 		}
 		function wsPushAudio(conns) {
