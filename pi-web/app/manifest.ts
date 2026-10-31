@@ -1,5 +1,8 @@
 import type { MetadataRoute } from "next";
 
+// 与 layout.tsx 同源开关：GBA 产品变体用 public/icons/gba/*，纯 Pi Web 用 public/icons/*。
+const ICON_DIR = process.env.NEXT_PUBLIC_GBA_STUDIO !== "0" ? "/icons/gba" : "/icons";
+
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
@@ -15,13 +18,13 @@ export default function manifest(): MetadataRoute.Manifest {
     lang: "en",
     icons: [
       {
-        src: "/icons/icon-192.png",
+        src: `${ICON_DIR}/icon-192.png`,
         sizes: "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/icons/icon-512.png",
+        src: `${ICON_DIR}/icon-512.png`,
         sizes: "512x512",
         type: "image/png",
         purpose: "any",

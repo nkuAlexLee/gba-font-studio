@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "GBA Font Studio",
-  "version": "1.0.0",
+  "version": "1.0.8",
   "identifier": "dev.gba.fontstudio",
   "build": {
     "frontendDist": "../frontend-dist"
@@ -11,7 +11,7 @@
       {
         "label": "main",
         "title": "GBA Font Studio",
-        "url": "http://127.0.0.1:30141/",
+        "url": "index.html",
         "width": 1440,
         "height": 900,
         "visible": false
@@ -34,7 +34,10 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "./installer-hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   }

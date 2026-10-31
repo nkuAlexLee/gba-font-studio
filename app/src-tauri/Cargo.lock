@@ -918,11 +918,12 @@ dependencies = [
 
 [[package]]
 name = "gba-font-studio"
-version = "1.0.0"
+version = "1.0.8"
 dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
