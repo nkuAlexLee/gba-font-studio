@@ -5,6 +5,8 @@
 # ---- 依赖与构建产物 ----
 node_modules/
 .next/
+.next-pure/
+.next-html-preview-test/
 out/
 dist/
 coverage/
@@ -14,6 +16,10 @@ app/src-tauri/target/
 app/src-tauri/gen/
 # payload junction → D:\gbfp\payload（build-payload.mjs 的产物，勿入仓）
 app/src-tauri/payload/
+# 纯净 Pi Web 变体（app-pure/）同款产物
+app-pure/src-tauri/target/
+app-pure/src-tauri/gen/
+app-pure/src-tauri/payload/
 
 # ---- 模拟器/工具运行时产物 ----
 tmp/*
@@ -83,3 +89,7 @@ pi/
 .DS_Store
 Thumbs.db
 *.bak
+
+# ---- agent/代理运行时导出（billion-context 会话快照，含上游地址）----
+sess.json
+sessions.json

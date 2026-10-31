@@ -7,7 +7,9 @@
 //! 2. 拉起两个 sidecar 服务（payload 内自带 node.exe）：
 //!    - pi-web（next start，:30141，agent 聊天 UI）
 //!    - romctl serve（:8645，GBA 模拟器 + 工作台数据后端）
-//! 3. 等 30141 就绪后导航 webview（窗口隐藏启动，避免白屏/报错页闪现）。
+//! 3. 主窗口初始页为捆绑自愈加载页（frontend-dist/index.html，启动即显示）：
+//!    加载页 no-cors 轮询 30141，通了自动跳转工作台；Rust 侧探测被安全软件拦截时
+//!    交由加载页自愈，不杀服务、不弹错误窗。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -77,21 +79,28 @@ fn main_inner() {
         .expect("error while running gba font studio");
 }
 
-/// 独立错误窗（bootstrap 失败时给出可见反馈）
+/// 独立错误窗（bootstrap 失败时给出可见反馈）。详细错误经 initialization_script
+/// 注入（页面脚本执行前生效），error.html 自己渲染样式化错误块；旧 eval 改
+/// innerHTML 会整页覆盖样式且与页面加载竞态（与 app-pure 同步，2026-10-01）。
 fn show_error_window(app: &tauri::AppHandle, msg: &str) {
     use tauri::WebviewWindowBuilder;
+    let json = serde_json::to_string(msg).unwrap_or_else(|_| "\"启动失败\"".into());
+    let init = format!("window.__PIWEB_BOOTSTRAP_ERROR = {json};");
     let _ = WebviewWindowBuilder::new(app, "error", tauri::WebviewUrl::App("error.html".into()))
         .title("GBA Font Studio — 启动失败")
         .inner_size(640.0, 320.0)
         .visible(true)
+        .initialization_script(&init)
         .build();
-    let escaped = msg.replace('\\', "\\\\").replace('`', "\\`").replace('<', "&lt;");
-    if let Some(w) = app.get_webview_window("error") {
-        let _ = w.eval(&format!(
-            "document.body.innerHTML = '<pre style=\"font:13px/1.6 monospace;padding:16px;white-space:pre-wrap\">{}</pre>';",
-            escaped
-        ));
-        let _ = w.show();
+}
+
+/// bootstrap 过程日志（release GUI 子系统没有 stderr，eprintln 全部丢失；
+/// 排障全靠本文件：data/logs/bootstrap.log）。与 app-pure 同构。
+fn bootstrap_log(data_dir: &Path, line: &str) {
+    let log_dir = data_dir.join("logs");
+    let _ = fs::create_dir_all(&log_dir);
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(log_dir.join("bootstrap.log")) {
+        let _ = writeln!(f, "[{}] {}", iso_from_ms(now_ms()), line);
     }
 }
 
@@ -143,27 +152,95 @@ fn bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
     let env_strs: Vec<(&str, &str)> = web_envs_owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
 
     // 1) 先用捆绑 node.exe（payload/runtime/node.exe）拉起。
-    //    ⚠ 部分安全软件（如腾讯电脑管家）会拦截"新复制的 exe"的回环连接（bind 成功但 accept 被滤），
-    //    表现为端口 LISTENING 但 HTTP 永不响应 → 探测失败后杀进程树并回退系统 node（PATH）。
+    //    ⚠ 部分安全软件（如腾讯电脑管家）会拦截"新复制的 exe"的回环连接（bind 成功但 accept 被滤）
+    //    —— 分类探测的 Blocked 特征（端口连得上但 HTTP 无响应，~6s 判定）→ 杀进程树回退系统 node；
+    //    连接被拒只是冷启动慢，继续等满窗口（实测 Ready 可达 ~10s，勿用固定短窗一票否决）。
+    //    曾中招的机器把决策落盘 data/node-fallback.json → 7 天内直启系统 node 免惩罚；放行后自动清标。
     //    instrumentation 随 next 进程自动拉起 romctl serve（GBA_STUDIO_DIR/GBA_WORKSPACE_DIR 环境继承）。
-    eprintln!("[gba-app] 拉起 pi-web …");
-    let mut web = spawn_server(&payload.join("runtime").join("node.exe"), &web_dir, web_args, &env_strs, "pi-web", &data_dir)?;
-    if wait_http("127.0.0.1", 30141, "/", Duration::from_secs(25)).is_err() {
-        eprintln!("[gba-app] 捆绑 node 无响应（疑似安全软件拦截），回退系统 node");
-        kill_tree(web.id());
-        let sys_node = PathBuf::from("node");
-        web = spawn_server(&sys_node, &web_dir, web_args, &env_strs, "pi-web-sysnode", &data_dir)?;
-        wait_http("127.0.0.1", 30141, "/", Duration::from_secs(90))?;
-    }
-
-    // 2) 等 romctl 就绪（instrumentation 已随 web 进程拉起；端口在 GBA_SERVE_PORT）
-    let _ = wait_http("127.0.0.1", 8645, "/status", Duration::from_secs(120));
-
+    let flag_path = data_dir.join("node-fallback.json");
+    let flag_fresh = fs::read_to_string(&flag_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("ts").and_then(|t| t.as_u64()))
+        .map(|ts| now_ms().saturating_sub(ts as u128) < 7 * 24 * 3600 * 1000)
+        .unwrap_or(false);
+    bootstrap_log(&data_dir, &format!("启动开始（bundled-node 回退标记: {flag_fresh}）"));
+    eprintln!("[gba-app] 拉起 pi-web …（bundled-node 回退标记: {flag_fresh}）");
+    // 主窗口初始页为捆绑加载页（frontend-dist/index.html，tauri.conf url=index.html）
+    // —— 启动即显示，加载页轮询自愈进工作台；消除“点击后长时间无窗口”的感知。
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.eval("location.replace('http://127.0.0.1:30141/')");
         let _ = win.show();
         let _ = win.set_focus();
     }
+
+    let bundled_node = payload.join("runtime").join("node.exe");
+    let sys_node = PathBuf::from("node");
+    let mut web: Option<std::process::Child> = None;
+    // 捆绑 node 失败原因（系统 node 也起不来时给出准确指引）
+    let mut bundled_issue: Option<&'static str> = None;
+    if !flag_fresh && bundled_node.exists() {
+        let child = spawn_server(&bundled_node, &web_dir, web_args, &env_strs, "pi-web", &data_dir)?;
+        match wait_http("127.0.0.1", 30141, "/", Duration::from_secs(25)) {
+            WaitOutcome::Ready => {
+                let _ = fs::remove_file(&flag_path); // 捆绑 node 已恢复 → 清除回退标记
+                web = Some(child);
+            }
+            outcome => {
+                let reason = if matches!(outcome, WaitOutcome::Blocked) { "http-silent" } else { "not-ready" };
+                eprintln!("[gba-app] 捆绑 node 未就绪（{reason}），回退系统 node");
+                bootstrap_log(&data_dir, &format!("捆绑 node 未就绪（{reason}），回退系统 node"));
+                kill_tree(child.id());
+                bundled_issue = match outcome {
+                    WaitOutcome::Blocked => Some("捆绑 node 被安全软件拦截（端口连得上但 HTTP 无响应）"),
+                    _ => Some("捆绑 node 启动超时（25s 内未就绪）"),
+                };
+                let _ = fs::write(&flag_path, format!("{{\"ts\":{},\"reason\":\"{reason}\"}}", now_ms()));
+            }
+        }
+    }
+    if web.is_none() {
+        let child = match spawn_server(&sys_node, &web_dir, web_args, &env_strs, "pi-web-sysnode", &data_dir) {
+            Ok(child) => child,
+            Err(e) => {
+                if let Some(issue) = bundled_issue {
+                    return Err(format!("{issue}，且系统 node 启动失败：{e}\n提示：将安装目录加入安全软件白名单后重试"));
+                }
+                return Err(e);
+            }
+        };
+        match wait_http("127.0.0.1", 30141, "/", Duration::from_secs(60)) {
+            WaitOutcome::Ready => web = Some(child),
+            outcome => {
+                // ⚠ 不杀 server、不报错（2026-10-01 16:44 实机案例，与 app-pure 同步）：
+                // sysnode 日志 Ready in 141ms，但桌面主程序（新装 exe）自身的探测连接被
+                // 安全软件拦截 → 旧逻辑把好端端的服务杀掉并弹错误窗。
+                // WebView（msedgewebview2，微软签名）不受拦，加载页的 no-cors 轮询会自愈
+                // 并自动跳转 30141；此处只记录诊断日志。
+                let why = if matches!(outcome, WaitOutcome::Blocked) {
+                    "HTTP 无响应（疑似安全软件拦截主程序自身的回环探测）"
+                } else {
+                    "启动超时（多为冷启动过慢或 pi-web 启动失败，见 pi-web-sysnode.log）"
+                };
+                bootstrap_log(&data_dir, &format!("系统 node 探测未就绪（{why}）→ 交由加载页轮询自愈，不再杀服务"));
+                eprintln!("[gba-app] 系统 node 探测未就绪（{why}）→ 加载页轮询自愈");
+            }
+        }
+    }
+    // web 不再显式 drop：Child drop 只关句柄不杀进程，服务在 Job Object（kill-on-close）
+    // 保护下随主进程退出整树终止
+
+    if web.is_some() {
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.eval("location.replace('http://127.0.0.1:30141/')");
+            let _ = win.set_focus();
+        }
+    }
+    // web == none：探测未通但服务可能活着 → 加载页持续轮询自愈，不弹错误窗
+
+    // 等 romctl 就绪（instrumentation 已随 web 进程拉起；端口在 GBA_SERVE_PORT）。
+    // 放在导航之后：工作台已先行进入，romctl 掉线由 StudioPanel 提示，不阻塞首屏。
+    let _ = wait_http("127.0.0.1", 8645, "/status", Duration::from_secs(120));
+    bootstrap_log(&data_dir, "bootstrap 结束");
     Ok(())
 }
 
@@ -244,33 +321,70 @@ fn kill_tree(pid: u32) {
     }
 }
 
-/// 极简 HTTP 可达性探测（不做 TLS；目标均为 127.0.0.1）
-fn wait_http(host: &str, port: u16, path: &str, timeout: Duration) -> Result<(), String> {
-    let start = Instant::now();
-    loop {
-        if start.elapsed() > timeout {
-            return Err(format!("等待 http://{host}:{port}{path} 超时（服务可能启动失败，见 data/logs/）"));
+/// 单次探测结果
+enum Attempt {
+    Ready,   // HTTP 已响应
+    Refused, // 连接被拒（回环上瞬时失败）= 还没监听，与拦截无关
+    Silent,  // 连接成功/悬挂但无 HTTP 响应 = 安全软件拦回环特征
+}
+
+/// 就绪探测最终结论
+enum WaitOutcome {
+    Ready,
+    Blocked, // 确认拦截特征（连续多次 Silent）
+    Timeout, // 截止时间内始终未就绪（多为冷启动过慢或启动失败）
+}
+
+/// 单次探测分类（不做 TLS）。连接/读写均设短超时：被拦截的端口 connect 可能永久悬挂，
+/// 不设超时会拖慢整个启动判定（旧版 TcpStream::connect 无超时，单次可阻塞 ~20s）。
+fn probe_once(addr: &std::net::SocketAddr, path: &str) -> Attempt {
+    match TcpStream::connect_timeout(addr, Duration::from_millis(1000)) {
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => Attempt::Refused,
+        Err(_) => Attempt::Silent, // connect 悬挂（1s 超时）等其他错误 → 疑似拦截
+        Ok(mut stream) => {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(1500)));
+            let req = format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            if stream.write_all(req.as_bytes()).is_err() {
+                return Attempt::Silent;
+            }
+            let mut buf = [0u8; 64];
+            let n = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
+            let head = String::from_utf8_lossy(&buf[..n]);
+            if head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.1 30") {
+                Attempt::Ready
+            } else {
+                Attempt::Silent // 连上但无/非 HTTP 响应
+            }
         }
-        if http_ok(host, port, path) {
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(800));
     }
 }
 
-fn http_ok(host: &str, port: u16, path: &str) -> bool {
-    let Ok(mut stream) = TcpStream::connect((host, port)) else {
-        return false;
+/// 分类探测主循环：HTTP 就绪 → Ready；连续 3 次「连上无响应」→ Blocked 提前判定
+/// （约 6s）；连接被拒只说明还没监听，重置连击并继续等满窗口（冷启动慢 ≠ 被拦截，
+/// 2026-10-01 教训：Ready in 9.6s 被 8s 固定窗误杀成 loopback-blocked）。
+fn wait_http(host: &str, port: u16, path: &str, timeout: Duration) -> WaitOutcome {
+    let Ok(addr) = format!("{host}:{port}").parse::<std::net::SocketAddr>() else {
+        return WaitOutcome::Timeout;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
-    let req = format!("GET {path} HTTP/1.0\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
-    if stream.write_all(req.as_bytes()).is_err() {
-        return false;
+    let start = Instant::now();
+    let mut silent_streak = 0u32;
+    loop {
+        if start.elapsed() > timeout {
+            return WaitOutcome::Timeout;
+        }
+        match probe_once(&addr, path) {
+            Attempt::Ready => return WaitOutcome::Ready,
+            Attempt::Refused => silent_streak = 0,
+            Attempt::Silent => {
+                silent_streak += 1;
+                if silent_streak >= 3 {
+                    return WaitOutcome::Blocked;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(500));
     }
-    let mut buf = [0u8; 64];
-    let n = std::io::Read::read(&mut stream, &mut buf).unwrap_or(0);
-    let head = String::from_utf8_lossy(&buf[..n]);
-    head.starts_with("HTTP/1.0 200") || head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.1 30")
 }
 
 /// 首次运行：把 payload 内模板复制到 workspace/agent 目录（幂等：不覆盖已有文件）；

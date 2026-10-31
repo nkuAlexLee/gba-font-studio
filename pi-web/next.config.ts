@@ -13,6 +13,10 @@ try {
 
 const nextConfig: NextConfig = {
   outputFileTracingRoot: configDir,
+  // 构建产物目录可用 NEXT_DIST_DIR 重定向（默认 .next）。
+  // 纯净 pi-web 桌面端变体（scripts/build-desktop.mjs --pure → app-pure/）用 .next-pure，
+  // 与 GBA Font Studio 产品构建的 .next 互不覆盖，两个变体可并行共存。
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // romctl serve HTTP 代理：工作台页面缺 ?api= 参数时（如直接访问 /gba-studio/index.html），
   // 前端走同源 /gba-api/*，由这里转发到 serve（端口与 gba-serve.ts 同源 env，启动时已就位）
   async rewrites() {

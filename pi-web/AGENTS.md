@@ -8,6 +8,8 @@ npm run dev   # port 30141
 
 Typecheck: `node_modules/.bin/tsc --noEmit`  
 Lint: `npm run lint`  
+Unit tests: `npm test` (colocated `**/*.test.mjs`; `lib/*.test.mjs` that load alias-using modules need jiti with `alias: { "@": <repo root> }`)  
+Browser tests in `test/`: `gba-workbench-test.mjs`, `piweb-integration-test.mjs` (occupy :30141/:8645), `html-preview-test.mjs` (own port :30341 + own `NEXT_DIST_DIR`, so it can run next to a dev server)  
 **Never run `next build` during dev** — pollutes `.next/` and breaks `npm run dev`.
 
 ### Dev server troubleshooting
@@ -62,6 +64,8 @@ app/api/
   cwd/validate/route.ts           POST validate/select a cwd
   default-cwd/route.ts            POST create ~/pi-cwd-YYYYMMDD
   files/[...path]/route.ts        GET file contents for viewer
+  files-raw/[...path]/route.ts    GET raw asset stream (HTML preview <base> fallback target)
+  files-html-preview/[...path]/route.ts  GET preview-ready HTML (local css/js/img inlined)
   home/route.ts                   GET user home directory
   models/route.ts                 GET { models, modelList, defaultModel }
   models-config/route.ts          GET/PUT — read/write ~/.pi/agent/models.json
@@ -80,6 +84,8 @@ lib/
   draft-store.ts       local draft persistence helpers
   file-access.ts       allowed file roots for /api/files and worktrees
   file-paths.ts        client/server path encoding helpers
+  html-preview.ts      server-side asset inlining for the sandboxed HTML preview
+  stream-file.ts       shared file streaming helpers for the files routes
   markdown.ts          shared markdown helpers
   npx.ts               npx runner used by skill install
   pi-types.ts          local structural types for pi SDK objects
@@ -175,6 +181,8 @@ Newer pi emits `compaction_start` / `compaction_end`; older versions emitted `au
 
 ### File access allow-list
 - `/api/files` is intentionally not a general filesystem browser. Allowed roots come from session cwds, their resolved project roots, `~/pi-cwd-*`, and roots explicitly added with `allowFileRoot()`.
+- `/api/files-raw` and `/api/files-html-preview` reuse the same `getAllowedFileRoots()`/`isFilePathAllowed()` boundary and only serve files (never directories). Keep the files API free of CORS headers: any `Access-Control-Allow-Origin` here (including `null`, which sandboxed pages send) lets an arbitrary web page read local files while the app runs.
+- HTML preview is assembled server-side because a sandboxed `srcdoc` iframe has an **opaque origin**: its relative subresource requests are cross-origin no-cors and Chromium rejects them with `net::ERR_BLOCKED_BY_ORB` (the stylesheet downloads but is never applied). `lib/html-preview.ts` inlines local stylesheets/scripts and turns images/fonts/media into `data:` URIs, so the preview document issues no subresource request at all. Do not "simplify" this back to `<base>` + raw API (that is only the pre-fetch fallback, and it cannot work in Chromium), and do not add `allow-same-origin` to the iframe sandbox — that would give a repo-controlled HTML file script access to the Pi Web origin.
 - `/api/cwd/validate`, `/api/default-cwd`, and `/api/worktrees` call `allowFileRoot()` when they make a new location browsable.
 - Allowed roots are stored slash-normalized, but that is a Set-key convention, not a correctness requirement: `isPathWithinRoots()` (`lib/path-security.ts`, the single implementation behind `isFilePathAllowed()`) re-resolves and case-folds both sides, so either path form authorizes correctly. Keep that one implementation — it is the security boundary.
 

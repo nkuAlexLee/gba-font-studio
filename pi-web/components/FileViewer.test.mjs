@@ -32,6 +32,21 @@ test("large source previews bypass the per-line syntax highlighter", () => {
   assert.notEqual(source.indexOf("highlightedSource", branchStart), -1);
 });
 
+test("HTML 预览用服务端内联文档，且停留在不透明源沙箱里", () => {
+  // 预览 iframe 没有 allow-same-origin → 文档是不透明源，页面自己发起的相对子资源会被
+  // Chromium ORB 拦掉，所以预览内容必须来自 /api/files-html-preview（见 lib/html-preview.ts）。
+  assert.match(source, /fetch\(`\/api\/files-html-preview\/\$\{encodeFilePathForApi\(filePath\)\}`\)/);
+  assert.match(source, /srcDoc=\{htmlPreviewDoc \?\? withPreviewBase\(viewerContent, filePath\)\}/);
+
+  const start = source.indexOf("srcDoc={htmlPreviewDoc");
+  const end = source.indexOf("/>", start);
+  assert.notEqual(start, -1, "preview iframe not found");
+  const iframe = source.slice(start, end);
+  const sandbox = iframe.match(/sandbox="([^"]*)"/)?.[1];
+  assert.equal(sandbox, "allow-scripts");
+  assert.doesNotMatch(iframe, /allow-same-origin/);
+});
+
 test("lightweight source rows are skipped for highlighted, diff, and preview views", () => {
   // Execute the source-view calculations without mounting the file-fetching component.
   const file = ts.createSourceFile("FileViewer.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);

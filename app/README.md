@@ -33,12 +33,13 @@ npx tauri build                  # 产物: src-tauri/target/release/bundle/nsis/
    │                             升级时 .pi/ 模板按指纹自动刷新；AGENTS.md 未被改动则同步更新，
    │                             改过则保留；roms/projects/work 永不触碰
    ├─ agent/                   ← PI_CODING_AGENT_DIR：sessions/（含初始欢迎会话）、设置与凭证
-   └─ logs/                    pi-web.log / romctl 日志
+   └─ logs/                    pi-web.log / romctl 日志 / bootstrap.log（客户端启动诊断）
 ```
 
 ## 运行
 
-双击 exe → 自动拉起 pi-web(:30141) 与 romctl serve(:8645) → 窗口就绪后自动进入工作台。
+双击 exe → 先显示捆绑加载页（启动即出窗口）→ 自动拉起 pi-web(:30141) 与 romctl serve(:8645)
+→ 加载页轮询到 pi-web 就绪后自动进入工作台。
 （或浏览器打开 http://127.0.0.1:30141 —— 与窗口内容一致。）
 
 新用户三步：
@@ -53,11 +54,13 @@ npx tauri build                  # 产物: src-tauri/target/release/bundle/nsis/
   （Job Object），安装器安装前自动清理残留。手动救急：任务管理器结束路径位于安装目录
   `payload\runtime\` 下的 node.exe（不要杀其它 node），或安装弹窗点 Retry。
 - **安全软件拦截**（腾讯电脑管家等会拦截“新复制的 exe”的回环连接：端口 LISTEN 但 HTTP 无响应）：
-  客户端已内置自愈——捆绑 node 无响应时自动杀进程树并回退系统 node；
-  两者都失败时会弹出指引窗口。建议把安装目录加入安全软件信任区。
+  客户端已内置自愈——捆绑 node 无响应时自动杀进程树并回退系统 node；若连客户端自身的探测
+  连接也被拦，加载页会继续轮询并自动进入工作台（不再杀服务、不再弹错误窗）。
+  建议把安装目录加入安全软件信任区。
 - **bash 工具警告 `could not find /tmp, please create!`**：Git for Windows 的 bash.exe 启动时检查
   `<gitbash根>/tmp` 目录（与 `TMP`/`TEMP` 环境变量无关）。客户端已在打包时（build-payload）与
   首启时（bootstrap 幂等创建）自动建好 `payload/runtime/gitbash/tmp/`；若手动精简过 payload，
   重建该空目录即可消除。
-- 日志：`data/logs/pi-web.log`、`data/logs/romctl.log`。
+- 日志：`data/logs/pi-web.log`、`data/logs/romctl.log`；客户端自身的启动流程与回退决策在
+  `data/logs/bootstrap.log`（release 无控制台，eprintln 不可见，排障看这个）。
 - 换 ROM / 工程定位：翻译工程在 `data/workspace/projects/<工程名>`（与具体 ROM 绑定，按需创建）。

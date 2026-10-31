@@ -16,6 +16,8 @@
 
 # next.js
 /.next/
+# 隔离 distDir：test/html-preview-test.mjs（可与开发态 dev server 并存）
+/.next-html-preview-test/
 /out/
 
 # production

@@ -1,0 +1,188 @@
+{
+  "agent": [
+    {
+      "id": "ark-code-latest"
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "doubao-seed-evolving",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 256000
+    },
+    {
+      "contextWindow": 262144,
+      "id": "doubao-seed-2.1-turbo",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 256000
+    },
+    {
+      "contextWindow": 262144,
+      "id": "doubao-seed-2.0-lite",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 262144,
+      "id": "doubao-seed-2.0-mini",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "glm-5.3",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "glm-5.3-flash",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "deepseek-v4-pro",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 393216
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "deepseek-v4-flash",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 393216
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "kimi-k3",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "glm-latest",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 262144,
+      "id": "kimi-k2.7-code",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 32768
+    },
+    {
+      "id": "minimax-m3"
+    }
+  ],
+  "coding": [
+    {
+      "id": "ark-code-latest",
+      "contextWindow": 262144,
+      "maxTokens": 32768,
+      "reasoning": true,
+      "compat": {
+        "thinkingFormat": "deepseek"
+      }
+    },
+    {
+      "contextWindow": 262144,
+      "id": "doubao-seed-2.0-lite",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 262144,
+      "id": "kimi-k2.7-code",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 32768
+    },
+    {
+      "id": "minimax-m3"
+    },
+    {
+      "contextWindow": 262144,
+      "id": "doubao-seed-2.1-turbo",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 256000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "deepseek-v4-flash",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 393216
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "glm-5.3",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 128000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "doubao-seed-evolving",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 256000
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "deepseek-v4-pro",
+      "input": [
+        "text"
+      ],
+      "maxTokens": 393216
+    },
+    {
+      "contextWindow": 1048576,
+      "id": "glm-5.3-flash",
+      "input": [
+        "text",
+        "image"
+      ],
+      "maxTokens": 128000
+    }
+  ]
+}

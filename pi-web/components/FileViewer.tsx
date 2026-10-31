@@ -221,6 +221,32 @@ function getFileApiUrl(
   return `/api/files/${encoded}?${searchParams.toString()}`;
 }
 
+/**
+ * Directory base URL for sandboxed HTML preview. The srcdoc iframe has no
+ * resource base of its own, so the previewed page's relative css/js/img would
+ * resolve against the app origin and 404. Point <base> at the raw-asset API
+ * for the file's directory (per-segment encoding keeps ../ resolution inside
+ * the API, e.g. D:\dir\ -> /api/files-raw/D%3A/dir/).
+ */
+function getFileRawDirBase(filePath: string): string {
+  const dir = getFileDirectory(filePath);
+  if (!dir) return "/api/files-raw/";
+  return `/api/files-raw/${encodeFilePathForApi(dir)}/`;
+}
+
+/** 预览文档未就绪时的回退：注入 <base> 指向原始资源接口（页面自带 <base> 优先）。 */
+function withPreviewBase(content: string, filePath: string): string {
+  if (/<base[\s>]/i.test(content)) return content;
+  const baseTag = `<base href="${getFileRawDirBase(filePath)}">`;
+  if (/<head[^>]*>/i.test(content)) {
+    return content.replace(/<head[^>]*>/i, (m) => `${m}${baseTag}`);
+  }
+  if (/<html[^>]*>/i.test(content)) {
+    return content.replace(/<html[^>]*>/i, (m) => `${m}${baseTag}`);
+  }
+  return `${baseTag}${content}`;
+}
+
 function DownloadLink({ filePath, sourceSessionId }: { filePath: string; sourceSessionId?: string | null }) {
   const { t } = useI18n();
   return (
@@ -1360,6 +1386,28 @@ function TextFileViewer({
   const language = data?.language ?? "text";
   const isHtml = language === "html";
   const isMarkdown = language === "markdown";
+
+  // HTML 预览走 /api/files-html-preview：服务端把本地相对 css/js/img 内联进文档。
+  // 不能靠 <base> + 原始资源接口：沙箱 iframe（无 allow-same-origin）是不透明源，
+  // 页面自己发起的相对请求属跨源 no-cors，被 Chromium ORB 拒（详见 lib/html-preview.ts）。
+  // 该响应到达前先回退到带 <base> 的原始 markup（至少外链资源可用）。
+  const [htmlPreviewDoc, setHtmlPreviewDoc] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isHtml) {
+      setHtmlPreviewDoc(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/files-html-preview/${encodeFilePathForApi(filePath)}`)
+      .then((res) => (res.ok ? res.text() : null))
+      .then((text) => {
+        if (!cancelled && text !== null) setHtmlPreviewDoc(text);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath, isHtml]);
   const hasPreview = isHtml || isMarkdown;
   const effectiveDisplayMode = isDeletedDiff ? "diff" : displayMode;
   const useLightweightSource = sourceLines.length > SOURCE_HIGHLIGHT_MAX_LINES
@@ -1525,7 +1573,6 @@ function TextFileViewer({
 
   if (!data && !isDeletedDiff) return null;
 
-  const content = viewerContent;
   const markdownDirectory = getFileDirectory(filePath);
   const lines = sourceLines;
   const displayModes: DisplayMode[] = isDeletedDiff
@@ -1667,10 +1714,10 @@ function TextFileViewer({
           <DiffView patch={gitDiff.patch!} />
         ) : isHtml && effectiveDisplayMode === "preview" ? (
           <iframe
-            srcDoc={content}
+            srcDoc={htmlPreviewDoc ?? withPreviewBase(viewerContent, filePath)}
             sandbox="allow-scripts"
             style={{ width: "100%", height: "100%", border: "none", background: "var(--bg)" }}
-             title={t("i18n.htmlPreview")}
+            title={t("i18n.htmlPreview")}
           />
         ) : isMarkdown && effectiveDisplayMode === "preview" ? (
           <div

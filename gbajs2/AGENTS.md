@@ -112,7 +112,12 @@ bootstrap 探测不到 payload（2026-09-08 实装翻车教训；重打包前先
    端点动态发现；`/review` 未指定时单工程自动选用、多工程要求 `?project=`；
    text_validate/text_insert 的 `project` 参数可选（省略时自动发现，0/1/多分支处理）。
 5. **AV 自愈**：腾讯电脑管家等会拦截"新复制 exe"的回环连接（LISTEN 但 accept 被滤）。
-   bootstrap 探测 25s 无响应即杀进程树回退系统 node（PATH）；皆败弹指引窗口。
+   bootstrap 就绪探测用分类判定：连接被拒=还没监听（冷启动慢）继续等满窗口；连得上但
+   HTTP 无响应（连续 3 次）=拦回环特征，~6s 即杀进程树回退系统 node（PATH），并把决策
+   落盘 data/node-fallback.json（7 天内免惩罚直启）。**回退后的系统 node 探测失败不再杀
+   服务、不再弹错误窗**：主窗口初始页是捆绑加载页（no-cors 轮询 30141），msedgewebview2
+   不受杀软回环拦截，通了自动跳转；失败仅记 data/logs/bootstrap.log（2026-10-01 实机：
+   sysnode 日志 Ready in 141ms，却被误判成未就绪）。
    用户侧建议把安装目录加入安全软件信任区。
 
 ### 验证方式（装机后）

@@ -454,7 +454,9 @@ export function AppShell() {
   const [activeFileTabId, setActiveFileTabId] = useState<string | null>(null);
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
   const [terminalsRestored, setTerminalsRestored] = useState(false);
-  // GBA 工作台（Studio iframe）：伪 tab，不参与持久化（刷新后按需重开）
+  // GBA 工作台（Studio iframe）：伪 tab，不参与持久化（刷新后按需重开）。
+  // 纯净 pi-web 变体（NEXT_PUBLIC_GBA_STUDIO=0，app-pure 桌面端）不渲染 GBA 入口。
+  const GBA_STUDIO_ENABLED = process.env.NEXT_PUBLIC_GBA_STUDIO !== "0";
   const STUDIO_TAB_ID = "gba-studio";
   const [studioTabOpen, setStudioTabOpen] = useState(false);
   const openStudioTab = useCallback(() => {
@@ -462,7 +464,7 @@ export function AppShell() {
     setRightPanelOpen(true);
     setActiveFileTabId(STUDIO_TAB_ID);
   }, []);
-  const panelTabs: Tab[] = [...(studioTabOpen ? [{ id: STUDIO_TAB_ID, label: "GBA 工作台", filePath: "" }] : []), ...fileTabs, ...terminalTabs.map((tab) => ({
+  const panelTabs: Tab[] = [...(GBA_STUDIO_ENABLED && studioTabOpen ? [{ id: STUDIO_TAB_ID, label: "GBA 工作台", filePath: "" }] : []), ...fileTabs, ...terminalTabs.map((tab) => ({
     id: tab.id,
     label: getFileName(tab.cwd) || tab.cwd,
     filePath: tab.cwd,
@@ -1209,6 +1211,7 @@ export function AppShell() {
           <SettingsSectionIcon section="general" size={14} strokeWidth={2} />
           <span>{translate("common.settings")}</span>
         </button>
+        {GBA_STUDIO_ENABLED && (
         <button
           type="button"
           onClick={openStudioTab}
@@ -1230,6 +1233,7 @@ export function AppShell() {
           </svg>
           <span>GBA</span>
         </button>
+        )}
       </div>
     </>
   );
@@ -2577,7 +2581,7 @@ export function AppShell() {
 
         {/* Only the active viewer is mounted. Lightweight per-tab state is restored on activation. */}
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden", paddingBottom: "env(safe-area-inset-bottom)" }}>
-          {activeFileTabId === STUDIO_TAB_ID ? (
+          {activeFileTabId === STUDIO_TAB_ID && GBA_STUDIO_ENABLED ? (
             <StudioPanel active={rightPanelOpen} />
           ) : activeFileTab?.filePath ? (
             <FileViewer

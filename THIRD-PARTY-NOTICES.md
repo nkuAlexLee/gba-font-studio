@@ -10,6 +10,7 @@ GBA Font Studio 安装包捆绑了以下第三方组件。分发时必须保留�
 | Git for Windows（bash 工具，仅 usr/bin） | `payload/runtime/gitbash/` | Git 本体 GPLv2；其捆绑的 MSYS2 运行时 msys-2.0.dll 为 GPLv3 | gitforwindows.org · msys2.org |
 | pi agent 内核 `@earendil-works/pi-coding-agent` | `payload/pi-web/node_modules/` | MIT（以 npm 包内 LICENSE 为准） | npm: @earendil-works/pi-coding-agent |
 | Next.js 及 pi-web 其余 npm 依赖 | `payload/pi-web/` | 以各自包内 LICENSE 为准（Next.js 为 MIT） | nextjs.org |
+| Noto Sans Mono 可变字体（latin/cyrillic woff2） | `payload/pi-web/public/fonts/` | SIL Open Font License 1.1（全文随附 `public/fonts/LICENSE-OFL.txt`） | @fontsource-variable/noto-sans-mono · fonts.google.com/specimen/Noto+Sans+Mono |
 
 ## 本项目自研部分
 

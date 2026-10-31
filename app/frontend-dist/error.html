@@ -1,2 +1,23 @@
-<!doctype html><html><head><meta charset="utf-8"><title>GBA Font Studio</title></head>
-<body style="font:14px/1.6 system-ui;display:grid;place-items:center;height:100vh;margin:0"><div>正在启动 GBA 字库工作台…<br>若长时间无响应请检查安装目录 data/logs/</div></body></html>
+<!doctype html><html><head><meta charset="utf-8"><title>GBA Font Studio — 启动失败</title>
+<style>
+  body { font: 14px/1.7 system-ui, "Segoe UI", sans-serif; display: grid; place-items: center; height: 100vh; margin: 0; color: #1f2937; }
+  .box { max-width: 560px; padding: 24px 28px; }
+  h3 { margin: 0 0 10px; font-size: 16px; }
+  pre { white-space: pre-wrap; font: 13px/1.6 Consolas, monospace; background: #f5f5f5; padding: 12px 14px; border-radius: 8px; margin: 0 0 10px; }
+  p { margin: 0; font-size: 12px; color: #6b7280; }
+</style></head>
+<body>
+<div class="box">
+  <h3>GBA Font Studio 启动遇到问题</h3>
+  <pre id="msg">正在收集错误信息…</pre>
+  <p>完整日志：安装目录 data/logs/（bootstrap.log / pi-web*.log）</p>
+</div>
+<script>
+  /* 详细错误由 Rust 侧 initialization_script 注入（页面脚本执行前生效，规避竞态）。
+   * 与 app-pure/frontend-dist/error.html 同构，仅标题文案不同。 */
+  var e = window.__PIWEB_BOOTSTRAP_ERROR;
+  document.getElementById("msg").textContent = e
+    ? e
+    : "未获取到详细错误。请查看安装目录 data/logs/（bootstrap.log / pi-web*.log）。";
+</script>
+</body></html>
